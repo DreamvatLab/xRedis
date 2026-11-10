@@ -317,3 +317,17 @@ err.command_rejected:
   en: "'%{command}' would put the connection into a special mode and is not allowed in the console. Use the Pub/Sub page for subscriptions."
 err.blocking_timeout:
   en: "'%{command}' timed out after %{secs}s. Use a shorter timeout argument instead of 0."
+
+# ---- Keys 子页(R-07a) ----
+keys.deleted:
+  en: "%{count} key(s) deleted."
+keys.copied:
+  en: "Copied %{count} key(s) to the clipboard."
+keys.copy_skipped:
+  en: "Skipped %{count} key(s) that no longer exist or cannot be copied: %{keys}"
+keys.pasted:
+  en: "Pasted %{count} key(s) from the clipboard."
+err.clipboard_write:
+  en: "Could not write to the clipboard: %{reason}. It may be held by another app (an input method, a clipboard manager, remote desktop). Try again."
+err.clipboard_read:
+  en: "Could not read the clipboard: %{reason}. It may be held by another app (an input method, a clipboard manager, remote desktop). Try again."

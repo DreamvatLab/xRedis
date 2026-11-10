@@ -18,6 +18,7 @@ use xredis_core::{Error, Result};
 use crate::errors::describe;
 use crate::forms::{ConnectionEditor, SettingsEditor};
 use crate::i18n::{export_template, resolve_language, tr, tr_with};
+use crate::keylist::{Ctx as KeysCtx, KeyList, KeysMsg};
 use crate::messages::{Level, MessageBar};
 use crate::msg::{BackendCmd, Cmd, Epoch, Msg, PlatformCmd, Saved, StartupData, SubPage};
 
@@ -39,13 +40,15 @@ pub enum TabStatus {
     Failed(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct Tab {
     pub id: ConnId,
     pub status: TabStatus,
     /// 当前这次请求的纪元。
     pub epoch: Epoch,
     pub sub_page: SubPage,
+    /// Keys 子页的状态(R-07a)。
+    pub keys: KeyList,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -260,7 +263,7 @@ impl App {
                 | Msg::SettingsSave
                 | Msg::SettingsCancel
                 | Msg::ExportLanguageTemplate
-        )
+        ) || matches!(msg, Msg::Keys { msg, .. } if !msg.is_result())
     }
 
     // ---- update ----
@@ -500,6 +503,9 @@ impl App {
                 Vec::new()
             }
 
+            // ---- Keys 子页 ----
+            Msg::Keys { id, msg } => self.on_keys(id, msg),
+
             // ---- 窗口 ----
             Msg::WindowChanged {
                 width,
@@ -633,6 +639,7 @@ impl App {
             status: TabStatus::Connecting,
             epoch,
             sub_page: SubPage::Keys,
+            keys: KeyList::new(),
         });
         self.active = Some(id);
         vec![Cmd::Backend(BackendCmd::Connect { id, epoch })]
@@ -691,7 +698,13 @@ impl App {
             return Vec::new();
         };
         match result {
-            Ok(info) => self.tabs[idx].status = TabStatus::Ready(info),
+            Ok(info) => {
+                self.tabs[idx].status = TabStatus::Ready(info);
+                // 第一次就绪、重连、切库之后:列表从头来(旧请求的结果因扫描代号对不上被丢弃),
+                // 然后自动搜索一次。没就绪之前一个 scan 都不发(L-02)
+                self.tabs[idx].keys.reset();
+                return self.on_keys(id, KeysMsg::Search);
+            }
             Err(err) => {
                 let message = self.describe(&err);
                 self.tabs[idx].status = TabStatus::Failed(message.clone());
@@ -703,6 +716,28 @@ impl App {
             }
         }
         Vec::new()
+    }
+
+    /// Keys 子页的消息。用户操作要求 Tab 就绪(L-02);异步结果在 Tab 已经关掉时丢弃(第 10 节)。
+    fn on_keys(&mut self, id: ConnId, msg: KeysMsg) -> Vec<Cmd> {
+        if !msg.is_result() && !self.can_request(id) {
+            return Vec::new();
+        }
+        let Some(idx) = self.tabs.iter().position(|t| t.id == id) else {
+            return Vec::new();
+        };
+        let now = self.now();
+        let ctx = KeysCtx {
+            id,
+            lang: &self.lang,
+            settings: &self.settings,
+            now,
+        };
+        let out = self.tabs[idx].keys.update(&ctx, msg);
+        for n in out.notes {
+            self.note(n.level, n.text, n.toast);
+        }
+        out.cmds
     }
 
     fn on_db_selected(

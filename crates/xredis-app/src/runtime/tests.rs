@@ -11,7 +11,7 @@ use xredis_core::keystore::{KeyStore, MemoryStore};
 use super::*;
 use crate::app::{AGREEMENT_VERSION, App, TabStatus};
 use crate::backend::CoreBackend;
-use crate::msg::{Cmd, PlatformCmd};
+use crate::msg::{Cmd, KeysMsg, Msg, PlatformCmd};
 use crate::testing::FakeBackend;
 
 // ---------------------------------------------------------------------------
@@ -127,41 +127,62 @@ async fn execute_turns_each_backend_command_into_its_msg() {
 // App 加 Runtime 加假 Backend 的端到端
 // ---------------------------------------------------------------------------
 
-struct Harness {
-    app: App,
+pub(crate) struct Harness {
+    pub(crate) app: App,
     rt: Runtime,
     rx: async_channel::Receiver<Msg>,
-    platform: Vec<String>,
+    pub(crate) platform: Vec<String>,
+    /// 模拟的系统剪贴板:`WriteClipboard` 写它,`ReadClipboard` 读它。
+    pub(crate) clipboard: Option<String>,
 }
 
 impl Harness {
-    fn new(fake: &Arc<FakeBackend>) -> Self {
+    pub(crate) fn new(fake: &Arc<FakeBackend>) -> Self {
         let (tx, rx) = async_channel::unbounded();
         Self {
             app: App::new(),
             rt: Runtime::new(fake.clone(), tx).unwrap(),
             rx,
             platform: Vec::new(),
+            clipboard: None,
         }
     }
 
     /// 喂一条 Msg,执行返回的命令(后端的交给 Runtime,平台的记下来)。
-    fn feed(&mut self, msg: Msg) {
+    pub(crate) fn feed(&mut self, msg: Msg) {
         let cmds = self.app.update(msg);
         self.run(cmds);
     }
 
-    fn run(&mut self, cmds: Vec<Cmd>) {
+    pub(crate) fn run(&mut self, cmds: Vec<Cmd>) {
         for c in cmds {
             match c {
                 Cmd::Backend(b) => self.rt.spawn(b),
+                // 剪贴板在 Harness 里模拟:写成功、读出刚才写的(没写过就报失败)
+                Cmd::Platform(PlatformCmd::WriteClipboard { id, text }) => {
+                    self.clipboard = Some(text);
+                    self.feed(Msg::Keys {
+                        id,
+                        msg: KeysMsg::ClipboardWritten(Ok(())),
+                    });
+                }
+                Cmd::Platform(PlatformCmd::ReadClipboard { id }) => {
+                    let r = self
+                        .clipboard
+                        .clone()
+                        .ok_or_else(|| "the clipboard is empty".to_string());
+                    self.feed(Msg::Keys {
+                        id,
+                        msg: KeysMsg::ClipboardRead(r),
+                    });
+                }
                 Cmd::Platform(p) => self.platform.push(format!("{p:?}")),
             }
         }
     }
 
     /// 等下一条结果(最多 `ms` 毫秒),喂给 App。没等到返回 false。
-    async fn pump(&mut self, ms: u64) -> bool {
+    pub(crate) async fn pump(&mut self, ms: u64) -> bool {
         match tokio::time::timeout(Duration::from_millis(ms), self.rx.recv()).await {
             Ok(Ok(msg)) => {
                 self.feed(msg);
@@ -171,8 +192,13 @@ impl Harness {
         }
     }
 
+    /// 等到 `quiet_ms` 毫秒内再没有结果回来,每条都喂给 App。
+    pub(crate) async fn settle(&mut self, quiet_ms: u64) {
+        while self.pump(quiet_ms).await {}
+    }
+
     /// 启动并同意协议。
-    async fn boot(&mut self) {
+    pub(crate) async fn boot(&mut self) {
         let cmds = self.app.start();
         self.run(cmds);
         assert!(self.pump(2000).await, "startup result");
@@ -258,11 +284,12 @@ async fn a_hung_close_does_not_block_the_ui_or_other_connections() {
     assert!(h.app.tab(a).is_none());
 
     h.feed(Msg::OpenConnection(b));
+    // 连接就绪后还会自动搜索,所以等到安静再看最终状态,不能指望“下一条消息”就是 Connected
+    h.settle(500).await;
     assert!(
-        h.pump(2000).await,
+        h.app.can_request(b),
         "the runtime is still serving other connections"
     );
-    assert!(h.app.can_request(b));
 }
 
 /// 第 10 节:关 Tab 之后迟到的结果(后端比较慢)回来了,要丢弃:不复活 Tab,不弹错误框。
@@ -331,9 +358,12 @@ async fn switching_db_round_trip() {
     assert!(h.pump(2000).await);
     h.feed(Msg::SelectDb { id, db: 4 });
     assert!(!h.app.can_request(id));
-    assert!(h.pump(2000).await, "db selected");
-    assert!(h.pump(2000).await, "connection info reloaded");
-    assert!(h.app.can_request(id));
+    // 初次连接后的自动搜索结果、切库结果、重连结果会按顺序陆续回来:等到安静再看最终状态
+    h.settle(500).await;
+    assert!(
+        h.app.can_request(id),
+        "db selected and the connection info reloaded"
+    );
     assert_eq!(h.app.connection(id).unwrap().selected_db, 4);
     assert_eq!(
         fake.store().connection(id).unwrap().selected_db,

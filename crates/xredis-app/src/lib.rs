@@ -8,6 +8,7 @@ pub mod backend;
 pub mod errors;
 pub mod forms;
 pub mod i18n;
+pub mod keylist;
 pub mod messages;
 pub mod msg;
 pub mod runtime;

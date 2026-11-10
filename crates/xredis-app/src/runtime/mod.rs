@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use crate::backend::Backend;
-use crate::msg::{BackendCmd, Msg};
+use crate::msg::{BackendCmd, KeysMsg, Msg};
 
 pub struct Runtime {
     /// `Option` 是为了 `Drop` 里能把它取出来 `shutdown_background`(在异步环境里丢弃 runtime 会 panic)。
@@ -98,8 +98,57 @@ pub async fn execute(backend: &dyn Backend, cmd: BackendCmd) -> Option<Msg> {
             height,
             maximized,
         } => Msg::WindowSaved(backend.save_window_size(width, height, maximized).await),
+
+        // ---- Keys 子页 ----
+        BackendCmd::Scan {
+            id,
+            generation,
+            pattern,
+            count,
+            cursor,
+        } => Msg::Keys {
+            id,
+            msg: KeysMsg::ScanBatch {
+                generation,
+                result: backend.scan_keys(id, pattern, count, cursor).await,
+            },
+        },
+        BackendCmd::KeyDetails {
+            id,
+            generation,
+            key,
+        } => Msg::Keys {
+            id,
+            msg: KeysMsg::DetailsLoaded {
+                generation,
+                result: backend.key_details(id, key.clone()).await,
+                key,
+            },
+        },
+        BackendCmd::DeleteKeys { id, keys } => Msg::Keys {
+            id,
+            msg: KeysMsg::Deleted(backend.delete_keys(id, keys).await),
+        },
+        BackendCmd::DbSize { id } => Msg::Keys {
+            id,
+            msg: KeysMsg::DbSize(backend.db_size(id).await),
+        },
+        BackendCmd::CopyKeys { id, keys } => Msg::Keys {
+            id,
+            msg: KeysMsg::Copied(backend.copy_keys(id, keys).await),
+        },
+        BackendCmd::PasteKeys {
+            id,
+            text,
+            overwrite,
+        } => Msg::Keys {
+            id,
+            msg: KeysMsg::Pasted(backend.paste_keys(id, text, overwrite).await),
+        },
     })
 }
 
 #[cfg(test)]
-mod tests;
+mod redis_tests;
+#[cfg(test)]
+pub(crate) mod tests;

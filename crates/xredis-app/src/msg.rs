@@ -6,11 +6,13 @@
 
 use std::path::PathBuf;
 
+use bytes::Bytes;
 use xredis_core::Error;
 use xredis_core::config::{ConnId, ConnectionConfig, ConnectionDraft, SaveOutcome, Settings};
 use xredis_core::conn::info::ConnectionInfo;
 
 use crate::i18n::PackReport;
+pub use crate::keylist::KeysMsg;
 
 /// 异步请求的纪元。每个 Tab 每发一次请求就换一个新的,迟到的旧结果对不上就丢掉。
 pub type Epoch = u64;
@@ -185,6 +187,12 @@ pub enum Msg {
     /// 防抖到点:代号还是最新的才保存。
     WindowSaveDue(u64),
     WindowSaved(Result<(), Error>),
+
+    // ---- Keys 子页(R-07a):用户操作和异步结果都在 `KeysMsg` 里 ----
+    Keys {
+        id: ConnId,
+        msg: KeysMsg,
+    },
 }
 
 /// 要异步执行的后端操作,结果由 Runtime 变成 `Msg` 发回。
@@ -213,6 +221,38 @@ pub enum BackendCmd {
         height: u32,
         maximized: bool,
     },
+
+    // ---- Keys 子页(R-07a)。`generation` 是扫描代号:结果带着它回来,对不上就丢弃 ----
+    /// 扫一批 key。`pattern` 为 `*` 时 core 不带 MATCH。
+    Scan {
+        id: ConnId,
+        generation: u64,
+        pattern: Bytes,
+        count: u32,
+        cursor: u64,
+    },
+    /// 取一个 key 的类型、长度、TTL。
+    KeyDetails {
+        id: ConnId,
+        generation: u64,
+        key: Bytes,
+    },
+    DeleteKeys {
+        id: ConnId,
+        keys: Vec<Bytes>,
+    },
+    DbSize {
+        id: ConnId,
+    },
+    CopyKeys {
+        id: ConnId,
+        keys: Vec<Bytes>,
+    },
+    PasteKeys {
+        id: ConnId,
+        text: String,
+        overwrite: bool,
+    },
 }
 
 /// 平台能力,由 GUI 层执行。
@@ -234,6 +274,16 @@ pub enum PlatformCmd {
     },
     /// 界面语言变了:切换全局 locale,让组件库自带的文字跟着变,并刷新界面。
     SetLocale(String),
+    /// 写系统剪贴板,结果用 `Msg::Keys { id, ClipboardWritten }` 发回。
+    /// 失败(比如 Windows 上剪贴板被别的程序占着)必须报回来,不能静默(L-13)。
+    WriteClipboard {
+        id: ConnId,
+        text: String,
+    },
+    /// 读系统剪贴板的文本,结果用 `Msg::Keys { id, ClipboardRead }` 发回。
+    ReadClipboard {
+        id: ConnId,
+    },
 }
 
 #[derive(Debug)]

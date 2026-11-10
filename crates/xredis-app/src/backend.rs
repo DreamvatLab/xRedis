@@ -5,13 +5,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use xredis_core::Result;
 use xredis_core::config::{
     ConfigStore, ConnId, ConnectionConfig, ConnectionDraft, SaveOutcome, Settings,
 };
 use xredis_core::conn::ConnManager;
 use xredis_core::conn::info::ConnectionInfo;
+use xredis_core::keys::{KeyDetails, ScanPage};
 use xredis_core::keystore::{FallbackStore, KeyStore, KeyringStore};
+use xredis_core::transfer::{CopyOutcome, PasteOutcome};
 use xredis_core::v1_import::{import_v1_if_first_run, v1_config_path};
 
 use crate::msg::{ImportSummary, Saved, StartupData};
@@ -29,6 +32,22 @@ pub trait Backend: Send + Sync + 'static {
     async fn select_db(&self, id: ConnId, db: u32) -> Result<()>;
     async fn save_settings(&self, settings: Settings) -> Result<()>;
     async fn save_window_size(&self, width: u32, height: u32, maximized: bool) -> Result<()>;
+
+    // ---- key 操作(R-07a)----
+    /// 扫一批 key。`pattern` 为 `*` 时不带 MATCH。
+    async fn scan_keys(
+        &self,
+        id: ConnId,
+        pattern: Bytes,
+        count: u32,
+        cursor: u64,
+    ) -> Result<ScanPage<Bytes>>;
+    async fn key_details(&self, id: ConnId, key: Bytes) -> Result<KeyDetails>;
+    /// 批量删除(core 内部每批 500 个),返回实际删掉的数量。
+    async fn delete_keys(&self, id: ConnId, keys: Vec<Bytes>) -> Result<u64>;
+    async fn db_size(&self, id: ConnId) -> Result<u64>;
+    async fn copy_keys(&self, id: ConnId, keys: Vec<Bytes>) -> Result<CopyOutcome>;
+    async fn paste_keys(&self, id: ConnId, text: String, overwrite: bool) -> Result<PasteOutcome>;
 }
 
 /// 生产实现。
@@ -191,5 +210,41 @@ impl Backend for CoreBackend {
     async fn save_window_size(&self, width: u32, height: u32, maximized: bool) -> Result<()> {
         let store = self.store.clone();
         blocking(move || store.save_window_size(width, height, maximized)).await
+    }
+
+    async fn scan_keys(
+        &self,
+        id: ConnId,
+        pattern: Bytes,
+        count: u32,
+        cursor: u64,
+    ) -> Result<ScanPage<Bytes>> {
+        let pool = self.manager.pool(id).await?;
+        xredis_core::keys::scan_keys(&pool, &pattern, count, cursor).await
+    }
+
+    async fn key_details(&self, id: ConnId, key: Bytes) -> Result<KeyDetails> {
+        let pool = self.manager.pool(id).await?;
+        xredis_core::keys::key_details(&pool, &key).await
+    }
+
+    async fn delete_keys(&self, id: ConnId, keys: Vec<Bytes>) -> Result<u64> {
+        let pool = self.manager.pool(id).await?;
+        xredis_core::keys::delete_keys(&pool, &keys).await
+    }
+
+    async fn db_size(&self, id: ConnId) -> Result<u64> {
+        let pool = self.manager.pool(id).await?;
+        xredis_core::keys::db_size(&pool).await
+    }
+
+    async fn copy_keys(&self, id: ConnId, keys: Vec<Bytes>) -> Result<CopyOutcome> {
+        let pool = self.manager.pool(id).await?;
+        xredis_core::transfer::copy_keys(&pool, &keys).await
+    }
+
+    async fn paste_keys(&self, id: ConnId, text: String, overwrite: bool) -> Result<PasteOutcome> {
+        let pool = self.manager.pool(id).await?;
+        xredis_core::transfer::paste(&pool, &text, overwrite).await
     }
 }

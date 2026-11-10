@@ -24,7 +24,7 @@
 ## Git
 
 - 都在 `dev` 分支工作,不直接推 `main`。合并 `main` 由作者决定。
-- 每完成一张工单提交并推送一次。半成品不推。推送前跑受影响 crate 的测试和 `cargo clippy --workspace --all-targets -- -D warnings`,记录里写明跑了哪些。
+- 每完成一张工单提交并推送一次。半成品不推。推送前按下面「测试范围」只跑受影响的测试,记录里写明跑了哪些、各多少个。
 - 推送前先 `git pull --rebase`,不用 force push。提交前看一眼 `git status`。
 - 架构师的 worktree 是 detached HEAD:`git fetch && git rebase origin/dev` 后提交,用 `git push origin HEAD:dev` 推。
 - 跑测试的脚本都加超时,超时就报告,不能静默挂住。
@@ -32,11 +32,22 @@
 ## 审核流程
 
 1. 读实际代码差异,不只看自述。
-2. 重跑测试和 clippy。
+2. 按「测试范围」重跑受影响的测试和 clippy。
 3. 针对疑点写探测用例,结论标明"已复现"或"读码"。
 4. 结论写进日志,返工和新工单加进 `docs/tickets.md`,再通知对方。
 
 修缺陷时先写回归测试,确认修复前失败。
+
+## 测试范围(作者 2026-11-10)
+
+**每次只跑受影响的测试。完整测试必须先得到作者和架构师两人的批准**,施工者和架构师都一样。
+
+- **受影响的**:改动的模块自己的测试,加上直接调用它的模块的测试。用 `cargo test -p <crate> <模块路径>` 过滤,例如改了 `keyview::editor` 就跑 `cargo test -p xredis-app keyview`。需要 Redis 的测试同样按模块过滤:`scripts/test-redis.sh test -p xredis-core types::tests`。
+- **只改了 core 的公开接口**(签名、类型)时,下游 crate 用 `cargo check -p <下游> --tests` 确认能编译,不跑下游的全部测试;下游里直接用到这个接口的模块的测试要跑。
+- **clippy** 只对改动的 crate:`cargo clippy -p <crate> --all-targets -- -D warnings`。
+- **变异检查**只跑抓它的那几个测试。
+- **完整测试**指:`cargo test --workspace`、不带过滤的 `scripts/test-redis.sh test`、对全部 crate 的 clippy、循环多轮的复现。要跑时先在日志里写理由,发消息问架构师,架构师同意后再问作者,两人都同意才跑。工单路线里的里程碑(R-12 验收)也一样要批准。
+- 审核时架构师也只重跑受影响的测试;怀疑有更大范围的影响时,按上一条申请。
 
 ## 测试和安全红线
 

@@ -10,8 +10,8 @@ name = "xredis"
 path = "src/main.rs"
 
 [dependencies]
-xredis-app = { path = "../xredis-app" }
-gpui-kit = "=0.9.1"
+xredis-app.workspace = true
+gpui-kit.workspace = true
 
 [dev-dependencies]
-gpui-kit = { version = "=0.9.1", features = ["test-support"] }
+gpui-kit = { workspace = true, features = ["test-support"] }

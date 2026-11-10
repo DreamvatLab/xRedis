@@ -40,7 +40,8 @@ fn main() {
         gpui_kit::open_window(options, cx, |window, cx| {
             let input = cx.new(|cx| InputState::new(window, cx));
             cx.new(|_| Root { input })
-        }).expect("open window");
+        })
+        .expect("open window");
         cx.activate(true);
     });
 }

@@ -8,6 +8,23 @@ edition = "2024"
 license = "UNLICENSED"
 publish = false
 
+[workspace.dependencies]
+xredis-core = { path = "crates/xredis-core" }
+xredis-app = { path = "crates/xredis-app" }
+# GPUI 只通过 gpui-kit 引入,版本钉死,升级要开工单
+gpui-kit = "=0.9.1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ulid = { version = "3", features = ["serde"] }
+dirs = "6"
+keyring = "4"
+# 只用于 v1 导入时解密 v1 的密码(算法和 v1 一致)
+magic-crypt = "5"
+tracing = "0.1"
+urlencoding = "2"
+tempfile = "3"
+
 # 磁盘(AGENTS.md「环境和磁盘」):不要增量编译缓存;调试信息只留行号,依赖不带调试信息
 [profile.dev]
 incremental = false

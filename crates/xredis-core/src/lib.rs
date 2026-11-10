@@ -1,5 +1,14 @@
 //! xredis-core:领域层(配置、密钥、Redis 连接和命令)。不依赖任何 GUI。
 
+pub mod config;
+pub mod conn;
+pub mod consts;
+pub mod error;
+pub mod keystore;
+pub mod v1_import;
+
+pub use error::{Error, Result};
+
 pub fn crate_name() -> &'static str {
     "xredis-core"
 }

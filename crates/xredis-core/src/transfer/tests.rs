@@ -310,6 +310,101 @@ mod redis {
         .await;
     }
 
+    /// R-07e:预检和冲突检查改成批量(多 key EXISTS 每批 500、pipeline 每批 500)。2000 个 key,
+    /// 已存在的放在批次边界上(0、499、500、999、1000、1499、1500、1999),结果必须和逐个 EXISTS 一样;
+    /// 剪贴板里有重复条目也对;耗时和旧写法(每个 key 一次往返)对比,打印出来。
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "needs redis"]
+    async fn r07e_batched_existence_checks_match_the_per_key_loop_and_are_faster() {
+        run(|fx| async move {
+            const N: usize = 2000;
+            let names: Vec<Bytes> = (0..N).map(|i| fx.key(&format!("k{i:04}"))).collect();
+            for k in &names {
+                put(&fx, k, b"v").await;
+            }
+            let text = copy_keys(&fx.pool, &names).await.unwrap().text;
+
+            // 旧写法:每个 key 一次 EXISTS 往返
+            let naive = |text: String| {
+                let pool = fx.pool.clone();
+                async move {
+                    let mut n = 0;
+                    for e in decode(&text).unwrap() {
+                        if keys::exists(&pool, e.id.as_bytes()).await.unwrap() {
+                            n += 1;
+                        }
+                    }
+                    n
+                }
+            };
+
+            // 全部存在:数量和耗时
+            let t = std::time::Instant::now();
+            let old = naive(text.clone()).await;
+            let old_ms = t.elapsed().as_millis();
+            let t = std::time::Instant::now();
+            let p = preview(&fx.pool, &text).await.unwrap();
+            let new_ms = t.elapsed().as_millis();
+            assert_eq!((old, p.total, p.existing), (N, N, N));
+            println!(
+                "R-07e preview of {N} existing keys: per-key loop {old_ms} ms, batched {new_ms} ms"
+            );
+
+            // 冲突检查:全部存在,不覆盖,列出全部名字,按剪贴板里的顺序
+            let t = std::time::Instant::now();
+            let err = paste(&fx.pool, &text, false).await.unwrap_err();
+            let paste_ms = t.elapsed().as_millis();
+            match err {
+                Error::PasteConflicts { conflicts, total } => {
+                    assert_eq!(total, N);
+                    assert_eq!(conflicts, names, "every name, in clipboard order");
+                }
+                other => panic!("{other:?}"),
+            }
+            println!("R-07e paste conflict check of {N} keys (batched): {paste_ms} ms");
+
+            // 只留批次边界上的 8 个
+            let keep = [0, 499, 500, 999, 1000, 1499, 1500, 1999];
+            let gone: Vec<Bytes> = (0..N)
+                .filter(|i| !keep.contains(i))
+                .map(|i| names[i].clone())
+                .collect();
+            keys::delete_keys(&fx.pool, &gone).await.unwrap();
+            let p = preview(&fx.pool, &text).await.unwrap();
+            assert_eq!((p.total, p.existing), (N, keep.len()));
+            assert_eq!(naive(text.clone()).await, keep.len());
+            match paste(&fx.pool, &text, false).await.unwrap_err() {
+                Error::PasteConflicts { conflicts, total } => {
+                    assert_eq!(total, N);
+                    let want: Vec<Bytes> = keep.iter().map(|&i| names[i].clone()).collect();
+                    assert_eq!(conflicts, want, "exactly the 8 on the batch edges");
+                }
+                other => panic!("{other:?}"),
+            }
+
+            // 重复条目:第一个 key(存在)出现两次,total 多 1,existing 也多 1;不存在的重复不算
+            let mut entries = decode(&text).unwrap();
+            entries.push(entries[0].clone());
+            entries.push(entries[1].clone());
+            let dup_text = encode(&entries).unwrap();
+            let p = preview(&fx.pool, &dup_text).await.unwrap();
+            assert_eq!((p.total, p.existing), (N + 2, keep.len() + 1));
+
+            // 没有冲突时粘贴成功:先把 8 个也删了
+            keys::delete_keys(
+                &fx.pool,
+                &keep.iter().map(|&i| names[i].clone()).collect::<Vec<_>>(),
+            )
+            .await
+            .unwrap();
+            let p = preview(&fx.pool, &text).await.unwrap();
+            assert_eq!((p.total, p.existing), (N, 0));
+            assert_eq!(paste(&fx.pool, &text, false).await.unwrap().count, N);
+            assert_eq!(preview(&fx.pool, &text).await.unwrap().existing, N);
+        })
+        .await;
+    }
+
     /// R-07d:粘贴预检只读:数出已存在的 key,不写任何东西;不是 REDIS: 数据直接报错。
     #[tokio::test(flavor = "multi_thread")]
     #[ignore = "needs redis"]

@@ -17,9 +17,11 @@ use fred::interfaces::ClientLike;
 use fred::types::Value;
 use serde::{Deserialize, Serialize};
 
-use crate::consts::{CLIPBOARD_PREFIX, COPY_MAX_TOTAL_BYTES, PASTE_MAX_DECOMPRESSED_BYTES};
+use crate::consts::{
+    CLIPBOARD_PREFIX, COPY_MAX_TOTAL_BYTES, EXISTS_BATCH, PASTE_MAX_DECOMPRESSED_BYTES,
+};
 use crate::error::{ClipboardStage, Error, Result, SkipReason, Skipped};
-use crate::keys::exists;
+use crate::keys::{exists_count, exists_each};
 use crate::value::*;
 
 /// 剪贴板里的一个 key。字段名和 v1 的 `IDValueDTO` 一致。
@@ -184,19 +186,22 @@ pub struct PastePreview {
     pub existing: usize,
 }
 
-/// 解码剪贴板并对每个 key 执行 `EXISTS`。解码失败(不是 REDIS: 数据、损坏、超限)原样返回错误,
+/// 解码剪贴板并数出已存在的 key。解码失败(不是 REDIS: 数据、损坏、超限)原样返回错误,
 /// 这时不该弹确认框。只读,不写任何东西。
+///
+/// 检查用多 key 的 `EXISTS k1 k2 …`,每批 `EXISTS_BATCH` 个、一次往返,把返回值累加
+/// (连远程 Redis 时,逐个 EXISTS 一万个 key 要几百秒)。Redis 对重复写的 key 每次都计数,
+/// 正好和“每个已存在的条目算一个”一致,所以不用先去重(测试里剪贴板有重复条目的情况验证了)。
 pub async fn preview(pool: &Pool, text: &str) -> Result<PastePreview> {
     let entries = decode(text)?;
-    let mut existing = 0;
-    for e in &entries {
-        if exists(pool, e.id.as_bytes()).await? {
-            existing += 1;
-        }
+    let mut existing = 0u64;
+    for batch in entries.chunks(EXISTS_BATCH) {
+        let keys: Vec<&[u8]> = batch.iter().map(|e| e.id.as_bytes()).collect();
+        existing += exists_count(pool, &keys).await?;
     }
     Ok(PastePreview {
         total: entries.len(),
-        existing,
+        existing: existing as usize,
     })
 }
 
@@ -214,10 +219,14 @@ pub(crate) async fn paste_entries(
 ) -> Result<PasteOutcome> {
     let total = entries.len();
     if !overwrite {
+        // 要列出冲突的名字:pipeline 每批 EXISTS_BATCH 个一次发出去
         let mut conflicts = Vec::new();
-        for e in &entries {
-            if exists(pool, e.id.as_bytes()).await? {
-                conflicts.push(Bytes::copy_from_slice(e.id.as_bytes()));
+        for batch in entries.chunks(EXISTS_BATCH) {
+            let keys: Vec<&[u8]> = batch.iter().map(|e| e.id.as_bytes()).collect();
+            for (key, yes) in keys.iter().zip(exists_each(pool, &keys).await?) {
+                if yes {
+                    conflicts.push(Bytes::copy_from_slice(key));
+                }
             }
         }
         if !conflicts.is_empty() {

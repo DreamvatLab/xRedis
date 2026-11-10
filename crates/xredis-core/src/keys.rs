@@ -166,6 +166,35 @@ pub async fn exists(pool: &Pool, key: &[u8]) -> Result<bool> {
     Ok(n > 0)
 }
 
+/// 一次 `EXISTS k1 k2 …` 数有几个存在(多个 key 一次往返)。同一个 key 写几次就算几次,
+/// 调用方要自己去重。空列表不发请求。
+pub async fn exists_count(pool: &Pool, keys: &[&[u8]]) -> Result<u64> {
+    if keys.is_empty() {
+        return Ok(0);
+    }
+    let n: i64 = pool
+        .custom(
+            command("EXISTS"),
+            keys.iter().map(|k| arg(k)).collect::<Vec<_>>(),
+        )
+        .await?;
+    Ok(n.max(0) as u64)
+}
+
+/// 每个 key 各自是否存在:用 pipeline 一次发出去(一次往返),按输入顺序返回。
+/// 要知道**哪些**存在时用它;只要数量用 [`exists_count`]。空列表不发请求。
+pub async fn exists_each(pool: &Pool, keys: &[&[u8]]) -> Result<Vec<bool>> {
+    if keys.is_empty() {
+        return Ok(Vec::new());
+    }
+    let pipe = pool.next().pipeline();
+    for k in keys {
+        let _: Value = pipe.custom(command("EXISTS"), vec![arg(k)]).await?;
+    }
+    let replies: Vec<i64> = pipe.all().await?;
+    Ok(replies.into_iter().map(|n| n > 0).collect())
+}
+
 pub async fn db_size(pool: &Pool) -> Result<u64> {
     let n: i64 = pool.custom(command("DBSIZE"), Vec::<Value>::new()).await?;
     Ok(n.max(0) as u64)

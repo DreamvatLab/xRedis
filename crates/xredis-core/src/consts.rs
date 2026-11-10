@@ -39,6 +39,8 @@ pub const UNRESPONSIVE_TIMEOUT_MS: u64 = 8_000;
 
 /// 批量删除 key 每批的数量(v2 新增)。
 pub const DELETE_BATCH: usize = 500;
+/// 粘贴前检查 key 是否存在时,每批发多少个(一次往返)。
+pub const EXISTS_BATCH: usize = 500;
 /// String 超过这个长度(字节)就只读前 `LARGE_VALUE_PREVIEW` 字节、只读显示(v2 新增)。
 pub const LARGE_VALUE_THRESHOLD: u64 = 8 * 1024 * 1024;
 pub const LARGE_VALUE_PREVIEW: u64 = 1024 * 1024;

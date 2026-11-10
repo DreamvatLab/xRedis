@@ -126,6 +126,7 @@ pub fn describe(lang: &str, err: &Error) -> String {
             "err.nothing_copied",
             &[("skipped", &skipped.len().to_string())],
         ),
+        Error::NotOpenable { kind } => w("err.not_openable", &[("kind", kind)]),
         Error::ClipboardNotRedis => tr(lang, "err.clipboard_not_redis"),
         Error::ClipboardCorrupt { stage, detail } => w(
             "err.clipboard_corrupt",

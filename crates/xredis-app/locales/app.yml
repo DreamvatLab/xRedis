@@ -297,6 +297,8 @@ err.copy_too_large:
   en: "Too much data to copy: reached %{total} at key '%{key}' after %{copied} key(s); the limit is %{limit}. Select fewer keys."
 err.nothing_copied:
   en: "Nothing was copied. %{skipped} key(s) were skipped."
+err.not_openable:
+  en: "A key of type %{kind} cannot be opened here."
 err.clipboard_not_redis:
   en: "The clipboard does not contain Redis data."
 err.clipboard_corrupt:
@@ -347,3 +349,41 @@ import.password_not_stored:
   en: "The password of connection %{label} could not be saved to the key store: %{reason}"
 msg.reopen_tab:
   en: "The connection was changed. Close and reopen its tab for the changes to take effect."
+view.saved:
+  en: "Saved."
+view.renamed:
+  en: "Key '%{old}' has been renamed to '%{new}'."
+view.ttl_updated:
+  en: "The TTL of '%{key}' has been updated."
+view.members_deleted:
+  en: "Deleted %{count} member(s) of '%{key}'."
+view.key_changed:
+  en: "The key '%{key}' no longer exists or has changed type."
+view.format_failed:
+  en: "The value is not valid JSON: %{reason}"
+view.err.read_only:
+  en: "This value is read-only."
+view.err.nothing_changed:
+  en: "Nothing has changed."
+view.err.key_name_empty:
+  en: "The key name cannot be empty."
+view.err.member_name_empty:
+  en: "The field or member name cannot be empty."
+view.err.score_invalid:
+  en: "The score must be a number."
+view.err.ttl_not_a_number:
+  en: "The TTL must be a whole number of seconds."
+view.binary_readonly:
+  en: "This value contains binary data and is shown read-only. Use the hex view to inspect it."
+view.truncated_readonly:
+  en: "This value is %{size}. Only the first %{shown} are shown, read-only."
+view.col.field:
+  en: "Field"
+view.col.index:
+  en: "Index"
+view.col.member:
+  en: "Member"
+view.col.value:
+  en: "Value"
+view.col.score:
+  en: "Score"

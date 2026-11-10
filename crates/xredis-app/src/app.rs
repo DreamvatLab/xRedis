@@ -19,6 +19,7 @@ use crate::errors::{describe, describe_import_warning, describe_startup_warning}
 use crate::forms::{ConnectionEditor, SettingsEditor};
 use crate::i18n::{export_template, resolve_language, tr, tr_with};
 use crate::keylist::{Ctx as KeysCtx, KeyList, KeysMsg};
+use crate::keyview::{KeyView, ListEffect, ViewMsg};
 use crate::messages::{Level, MessageBar};
 use crate::msg::{BackendCmd, Cmd, Epoch, Msg, PlatformCmd, Saved, StartupData, SubPage};
 
@@ -49,6 +50,10 @@ pub struct Tab {
     pub sub_page: SubPage,
     /// Keys 子页的状态(R-07a)。
     pub keys: KeyList,
+    /// 打开的 key(值编辑器、成员表、新建 key,R-07b),没有就是 `None`。
+    pub view: Option<KeyView>,
+    /// 视图代号的计数器,只增不减:换了视图,旧视图的迟到结果对不上就丢弃。
+    view_seq: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -264,6 +269,7 @@ impl App {
                 | Msg::SettingsCancel
                 | Msg::ExportLanguageTemplate
         ) || matches!(msg, Msg::Keys { msg, .. } if !msg.is_result())
+            || matches!(msg, Msg::View { msg, .. } if !msg.is_result())
     }
 
     // ---- update ----
@@ -505,6 +511,7 @@ impl App {
 
             // ---- Keys 子页 ----
             Msg::Keys { id, msg } => self.on_keys(id, msg),
+            Msg::View { id, msg } => self.on_view(id, msg),
 
             // ---- 窗口 ----
             Msg::WindowChanged {
@@ -640,6 +647,8 @@ impl App {
             epoch,
             sub_page: SubPage::Keys,
             keys: KeyList::new(),
+            view: None,
+            view_seq: 0,
         });
         self.active = Some(id);
         vec![Cmd::Backend(BackendCmd::Connect { id, epoch })]
@@ -703,6 +712,8 @@ impl App {
                 // 第一次就绪、重连、切库之后:列表从头来(旧请求的结果因扫描代号对不上被丢弃),
                 // 然后自动搜索一次。没就绪之前一个 scan 都不发(L-02)
                 self.tabs[idx].keys.reset();
+                // 重连或切库之后,打开着的 key 不一定还在:关掉
+                self.tabs[idx].view = None;
                 return self.on_keys(id, KeysMsg::Search);
             }
             Err(err) => {
@@ -738,6 +749,69 @@ impl App {
             self.note(n.level, n.text, n.toast);
         }
         out.cmds
+    }
+
+    /// 打开的 key(R-07b)。和 Keys 一样:用户操作要等 Tab 就绪,异步结果不挡;
+    /// 视图关了或换了,迟到的结果在 `KeyView` 里按代号丢弃。
+    fn on_view(&mut self, id: ConnId, msg: ViewMsg) -> Vec<Cmd> {
+        if !msg.is_result() && !self.can_request(id) {
+            return Vec::new();
+        }
+        let Some(idx) = self.tabs.iter().position(|t| t.id == id) else {
+            return Vec::new();
+        };
+        let now = self.now();
+        let ctx = KeysCtx {
+            id,
+            lang: &self.lang,
+            settings: &self.settings,
+            now,
+        };
+        let tab = &mut self.tabs[idx];
+        let out = match msg {
+            ViewMsg::Open { key, kind } => {
+                tab.view_seq += 1;
+                match KeyView::open(&ctx, tab.view_seq, key, kind) {
+                    Ok((view, out)) => {
+                        tab.view = Some(view);
+                        out
+                    }
+                    Err(err) => {
+                        let text = describe(&self.lang, &err);
+                        self.note(Level::Error, text, true);
+                        return Vec::new();
+                    }
+                }
+            }
+            ViewMsg::NewKey(kind) => {
+                tab.view_seq += 1;
+                tab.view = KeyView::new_key(tab.view_seq, kind);
+                return Vec::new();
+            }
+            ViewMsg::Close => {
+                tab.view = None;
+                return Vec::new();
+            }
+            other => match &mut tab.view {
+                Some(view) => view.update(&ctx, other),
+                None => return Vec::new(),
+            },
+        };
+        let mut cmds = out.cmds;
+        if out.close {
+            self.tabs[idx].view = None;
+        }
+        for n in out.notes {
+            self.note(n.level, n.text, n.toast);
+        }
+        for effect in out.list {
+            let msg = match effect {
+                ListEffect::Search => KeysMsg::Search,
+                ListEffect::RefreshDetails(key) => KeysMsg::RefreshDetails(key),
+            };
+            cmds.extend(self.on_keys(id, msg));
+        }
+        cmds
     }
 
     fn on_db_selected(

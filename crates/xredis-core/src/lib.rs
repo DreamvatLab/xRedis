@@ -7,6 +7,7 @@ pub mod consts;
 pub mod error;
 pub mod keys;
 pub mod keystore;
+pub mod members;
 pub mod pubsub;
 pub mod transfer;
 pub mod types;

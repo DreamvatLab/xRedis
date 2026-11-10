@@ -142,6 +142,9 @@ pub enum Error {
     /// 逐个 RESTORE 时某个 key 失败(前面的已经写入)。
     #[error("Failed to restore key '{}': {detail}", lossy(.key))]
     RestoreFailed { key: Bytes, detail: String },
+    /// 这种类型的 key 不能打开(Stream、模块类型,P-16)。
+    #[error("A key of type '{kind}' cannot be opened")]
+    NotOpenable { kind: String },
     /// 控制台命令分词失败,不发送。
     #[error("Invalid command syntax: {0}")]
     CommandSyntax(crate::console::SplitError),

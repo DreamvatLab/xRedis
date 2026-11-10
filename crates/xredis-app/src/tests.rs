@@ -1557,6 +1557,12 @@ fn every_core_error_kind_has_a_translation_and_carries_its_parameters() {
             vec!["Nothing was copied", "1 key(s)"],
         ),
         (
+            Error::NotOpenable {
+                kind: "Stream".into(),
+            },
+            vec!["Stream", "cannot be opened"],
+        ),
+        (
             Error::ClipboardNotRedis,
             vec!["does not contain Redis data"],
         ),

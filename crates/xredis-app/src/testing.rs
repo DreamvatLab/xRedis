@@ -13,7 +13,10 @@ use xredis_core::config::{ConfigStore, ConnId, ConnectionConfig, ConnectionDraft
 use xredis_core::conn::info::{ConnectionInfo, KeyspaceInfo};
 use xredis_core::keys::{KeyDetails, KeyType, ScanPage, Ttl};
 use xredis_core::keystore::MemoryStore;
+use xredis_core::members::{ApplyFailure, Member, MemberOp, MemberPage, NewContent, WriteOp};
 use xredis_core::transfer::{ClipboardEntry, CopyOutcome, PasteOutcome, PastePreview};
+use xredis_core::types::list::Side;
+use xredis_core::types::string::{SetMode, StringValue};
 use xredis_core::{Error, Result};
 
 use crate::backend::Backend;
@@ -37,6 +40,12 @@ struct Control {
     /// `key_details` 正在进行的数量和出现过的最大值(验证并发上限)。
     details_now: usize,
     details_max: usize,
+    /// String 的值(R-07b);`Some(total)` 表示只“读到”前面一部分,真实长度是 total。
+    strings: HashMap<Bytes, (Bytes, Option<u64>)>,
+    /// 成员(Hash、List、Set、ZSet),按插入顺序,`scan_members` 按它分页。
+    members: HashMap<Bytes, Vec<Member>>,
+    /// 成功执行过的写操作。
+    applied: Vec<WriteOp>,
 }
 
 pub struct FakeBackend {
@@ -131,6 +140,75 @@ impl FakeBackend {
                 Ttl::Persistent,
             );
         }
+    }
+
+    /// 放一个 String key 和它的值。
+    pub fn put_string(&self, key: &[u8], value: &[u8]) {
+        let mut c = self.ctl.lock().unwrap();
+        c.keyspace.insert(
+            Bytes::copy_from_slice(key),
+            KeyDetails {
+                kind: KeyType::String,
+                length: Some(value.len() as u64),
+                ttl: Ttl::Persistent,
+            },
+        );
+        c.strings.insert(
+            Bytes::copy_from_slice(key),
+            (Bytes::copy_from_slice(value), None),
+        );
+    }
+
+    /// 放一个“大”String:只读得到 `shown`,真实长度是 `total`。
+    pub fn put_big_string(&self, key: &[u8], shown: &[u8], total: u64) {
+        self.put_string(key, shown);
+        let mut c = self.ctl.lock().unwrap();
+        c.strings.insert(
+            Bytes::copy_from_slice(key),
+            (Bytes::copy_from_slice(shown), Some(total)),
+        );
+    }
+
+    /// 放一个带成员的 key。
+    pub fn put_members(&self, key: &[u8], kind: KeyType, members: Vec<Member>) {
+        let mut c = self.ctl.lock().unwrap();
+        c.keyspace.insert(
+            Bytes::copy_from_slice(key),
+            KeyDetails {
+                kind,
+                length: Some(members.len() as u64),
+                ttl: Ttl::Persistent,
+            },
+        );
+        c.members.insert(Bytes::copy_from_slice(key), members);
+    }
+
+    pub fn string_value(&self, key: &[u8]) -> Option<Bytes> {
+        self.ctl
+            .lock()
+            .unwrap()
+            .strings
+            .get(key)
+            .map(|(v, _)| v.clone())
+    }
+
+    pub fn member_rows(&self, key: &[u8]) -> Vec<Member> {
+        self.ctl
+            .lock()
+            .unwrap()
+            .members
+            .get(key)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub fn key_ttl(&self, key: &[u8]) -> Option<Ttl> {
+        self.ctl.lock().unwrap().keyspace.get(key).map(|d| d.ttl)
+    }
+
+    /// 成功执行过的写操作,按顺序。
+    pub fn applied(&self) -> Vec<WriteOp> {
+        self.ctl.lock().unwrap().applied.clone()
     }
 
     /// 让每一页多返回上一页最后 `n` 个 key(重复)。
@@ -351,6 +429,58 @@ impl Backend for FakeBackend {
         })
     }
 
+    async fn read_string(&self, id: ConnId, key: Bytes) -> Result<Option<StringValue>> {
+        self.enter("read_string", format!("{id}")).await?;
+        let c = self.ctl.lock().unwrap();
+        Ok(c.strings.get(&key).map(|(data, total)| StringValue {
+            data: data.clone(),
+            total_len: total.unwrap_or(data.len() as u64),
+            truncated: total.is_some(),
+        }))
+    }
+
+    async fn scan_members(
+        &self,
+        id: ConnId,
+        key: Bytes,
+        kind: KeyType,
+        _pattern: Bytes,
+        count: u32,
+        cursor: u64,
+    ) -> Result<MemberPage> {
+        self.enter("scan_members", format!("{id}:{cursor}")).await?;
+        if !kind.openable() {
+            return Err(Error::NotOpenable {
+                kind: format!("{kind:?}"),
+            });
+        }
+        let c = self.ctl.lock().unwrap();
+        let all = c.members.get(&key).cloned().unwrap_or_default();
+        let start = (cursor as usize).min(all.len());
+        let end = (start + count as usize).min(all.len());
+        Ok(MemberPage {
+            items: all[start..end].to_vec(),
+            cursor: if end >= all.len() { 0 } else { end as u64 },
+        })
+    }
+
+    async fn apply_writes(
+        &self,
+        id: ConnId,
+        ops: Vec<WriteOp>,
+    ) -> std::result::Result<(), ApplyFailure> {
+        self.enter("apply_writes", format!("{id}:{}", ops.len()))
+            .await
+            .map_err(|error| ApplyFailure { done: 0, error })?;
+        let mut c = self.ctl.lock().unwrap();
+        for (done, op) in ops.iter().enumerate() {
+            c.apply_one(op)
+                .map_err(|error| ApplyFailure { done, error })?;
+            c.applied.push(op.clone());
+        }
+        Ok(())
+    }
+
     async fn preview_paste(&self, id: ConnId, text: String) -> Result<PastePreview> {
         self.enter("preview_paste", format!("{id}")).await?;
         let entries = xredis_core::transfer::decode(&text)?;
@@ -395,6 +525,293 @@ impl Backend for FakeBackend {
             );
         }
         Ok(PasteOutcome { count })
+    }
+}
+
+fn exists_err(key: &Bytes) -> Error {
+    Error::AlreadyExists {
+        entity: xredis_core::error::Entity::Key,
+        name: key.clone(),
+        container: None,
+    }
+}
+
+fn missing_err(key: &Bytes) -> Error {
+    Error::Missing {
+        entity: xredis_core::error::Entity::Key,
+        name: key.clone(),
+        container: None,
+    }
+}
+
+impl Control {
+    fn refresh_len(&mut self, key: &Bytes) {
+        // List 的下标跟着重排
+        if let Some(rows) = self.members.get_mut(key) {
+            let mut i = 0;
+            for r in rows.iter_mut() {
+                if let Member::List { index, .. } = r {
+                    *index = i;
+                    i += 1;
+                }
+            }
+        }
+        let n = self.members.get(key).map(|m| m.len() as u64);
+        if let (Some(n), Some(d)) = (n, self.keyspace.get_mut(key)) {
+            d.length = Some(n);
+        }
+    }
+
+    fn put_new(&mut self, key: &Bytes, kind: KeyType) {
+        self.keyspace.insert(
+            key.clone(),
+            KeyDetails {
+                kind,
+                length: Some(0),
+                ttl: Ttl::Persistent,
+            },
+        );
+    }
+
+    /// 内存里的最小实现:够测视图模型的流程,不是 Redis 的完整语义。
+    fn apply_one(&mut self, op: &WriteOp) -> Result<()> {
+        match op {
+            WriteOp::RenameKey { old, new } => {
+                if !self.keyspace.contains_key(old) {
+                    return Err(missing_err(old));
+                }
+                if self.keyspace.contains_key(new) {
+                    return Err(exists_err(new));
+                }
+                let d = self.keyspace.remove(old).unwrap();
+                self.keyspace.insert(new.clone(), d);
+                if let Some(v) = self.strings.remove(old) {
+                    self.strings.insert(new.clone(), v);
+                }
+                if let Some(v) = self.members.remove(old) {
+                    self.members.insert(new.clone(), v);
+                }
+            }
+            WriteOp::SetTtl { key, seconds } => {
+                let d = self.keyspace.get_mut(key).ok_or_else(|| missing_err(key))?;
+                d.ttl = if *seconds == -1 {
+                    Ttl::Persistent
+                } else {
+                    Ttl::Seconds(*seconds)
+                };
+            }
+            WriteOp::SetString { key, value, mode } => {
+                let exists = self.keyspace.contains_key(key);
+                if *mode == SetMode::Create && exists {
+                    return Err(exists_err(key));
+                }
+                let ttl = match mode {
+                    SetMode::KeepTtl => self.keyspace.get(key).map(|d| d.ttl),
+                    _ => None,
+                };
+                self.keyspace.insert(
+                    key.clone(),
+                    KeyDetails {
+                        kind: KeyType::String,
+                        length: Some(value.len() as u64),
+                        ttl: ttl.unwrap_or(Ttl::Persistent),
+                    },
+                );
+                self.strings.insert(key.clone(), (value.clone(), None));
+            }
+            WriteOp::CreateKey { key, content } => {
+                if self.keyspace.contains_key(key) {
+                    return Err(exists_err(key));
+                }
+                match content {
+                    NewContent::String(v) => {
+                        self.put_new(key, KeyType::String);
+                        self.keyspace.get_mut(key).unwrap().length = Some(v.len() as u64);
+                        self.strings.insert(key.clone(), (v.clone(), None));
+                    }
+                    NewContent::Hash { field, value } => {
+                        self.put_new(key, KeyType::Hash);
+                        self.members.insert(
+                            key.clone(),
+                            vec![Member::Hash {
+                                field: field.clone(),
+                                value: value.clone(),
+                            }],
+                        );
+                    }
+                    NewContent::List { value, .. } => {
+                        self.put_new(key, KeyType::List);
+                        self.members.insert(
+                            key.clone(),
+                            vec![Member::List {
+                                index: 0,
+                                value: value.clone(),
+                            }],
+                        );
+                    }
+                    NewContent::Set(m) => {
+                        self.put_new(key, KeyType::Set);
+                        self.members
+                            .insert(key.clone(), vec![Member::Set { member: m.clone() }]);
+                    }
+                    NewContent::ZSet { member, score } => {
+                        self.put_new(key, KeyType::ZSet);
+                        self.members.insert(
+                            key.clone(),
+                            vec![Member::ZSet {
+                                member: member.clone(),
+                                score: *score,
+                            }],
+                        );
+                    }
+                }
+                self.refresh_len(key);
+            }
+            WriteOp::Member { key, op } => {
+                if !self.keyspace.contains_key(key) {
+                    return Err(missing_err(key));
+                }
+                self.member_op(key, op)?;
+                self.refresh_len(key);
+            }
+        }
+        Ok(())
+    }
+
+    fn member_op(&mut self, key: &Bytes, op: &MemberOp) -> Result<()> {
+        use xredis_core::error::Entity;
+        let dup = |entity, name: &Bytes| Error::AlreadyExists {
+            entity,
+            name: name.clone(),
+            container: Some(key.clone()),
+        };
+        let gone = |entity, name: &Bytes| Error::Missing {
+            entity,
+            name: name.clone(),
+            container: Some(key.clone()),
+        };
+        let rows = self.members.entry(key.clone()).or_default();
+        let hash_pos = |rows: &[Member], f: &Bytes| {
+            rows.iter()
+                .position(|r| matches!(r, Member::Hash { field, .. } if field == f))
+        };
+        let set_pos = |rows: &[Member], m: &Bytes| {
+            rows.iter()
+                .position(|r| matches!(r, Member::Set { member } if member == m))
+        };
+        let zset_pos = |rows: &[Member], m: &Bytes| {
+            rows.iter()
+                .position(|r| matches!(r, Member::ZSet { member, .. } if member == m))
+        };
+        match op {
+            MemberOp::HashSet { field, value } => match hash_pos(rows, field) {
+                Some(i) => {
+                    rows[i] = Member::Hash {
+                        field: field.clone(),
+                        value: value.clone(),
+                    }
+                }
+                None => rows.push(Member::Hash {
+                    field: field.clone(),
+                    value: value.clone(),
+                }),
+            },
+            MemberOp::HashAdd { field, value } => {
+                if hash_pos(rows, field).is_some() {
+                    return Err(dup(Entity::HashField, field));
+                }
+                rows.push(Member::Hash {
+                    field: field.clone(),
+                    value: value.clone(),
+                });
+            }
+            MemberOp::HashRename { old, new } => {
+                if hash_pos(rows, new).is_some() {
+                    return Err(dup(Entity::HashField, new));
+                }
+                let i = hash_pos(rows, old).ok_or_else(|| gone(Entity::HashField, old))?;
+                if let Member::Hash { field, .. } = &mut rows[i] {
+                    *field = new.clone();
+                }
+            }
+            MemberOp::HashDelete(fields) => {
+                rows.retain(|r| !matches!(r, Member::Hash { field, .. } if fields.contains(field)))
+            }
+            MemberOp::ListPush { value, side } => {
+                let row = Member::List {
+                    index: 0,
+                    value: value.clone(),
+                };
+                match side {
+                    Side::Head => rows.insert(0, row),
+                    Side::Tail => rows.push(row),
+                }
+            }
+            MemberOp::ListSet { index, value } => match rows.get_mut(*index as usize) {
+                Some(Member::List { value: v, .. }) => *v = value.clone(),
+                _ => {
+                    return Err(Error::ListIndexOutOfRange {
+                        index: *index,
+                        len: rows.len() as u64,
+                    });
+                }
+            },
+            MemberOp::ListRemove(indexes) => {
+                let mut i = 0i64;
+                rows.retain(|_| {
+                    let keep = !indexes.contains(&i);
+                    i += 1;
+                    keep
+                });
+            }
+            MemberOp::SetAdd(m) => {
+                if set_pos(rows, m).is_some() {
+                    return Err(dup(Entity::SetMember, m));
+                }
+                rows.push(Member::Set { member: m.clone() });
+            }
+            MemberOp::SetRename { old, new } => {
+                if set_pos(rows, new).is_some() {
+                    return Err(dup(Entity::SetMember, new));
+                }
+                let i = set_pos(rows, old).ok_or_else(|| gone(Entity::SetMember, old))?;
+                rows[i] = Member::Set {
+                    member: new.clone(),
+                };
+            }
+            MemberOp::SetRemove(ms) => {
+                rows.retain(|r| !matches!(r, Member::Set { member } if ms.contains(member)))
+            }
+            MemberOp::ZAdd { member, score } => {
+                if zset_pos(rows, member).is_some() {
+                    return Err(dup(Entity::ZSetMember, member));
+                }
+                rows.push(Member::ZSet {
+                    member: member.clone(),
+                    score: *score,
+                });
+            }
+            MemberOp::ZSetScore { member, score } => {
+                let i = zset_pos(rows, member).ok_or_else(|| gone(Entity::ZSetMember, member))?;
+                rows[i] = Member::ZSet {
+                    member: member.clone(),
+                    score: *score,
+                };
+            }
+            MemberOp::ZRename { old, new } => {
+                if zset_pos(rows, new).is_some() {
+                    return Err(dup(Entity::ZSetMember, new));
+                }
+                let i = zset_pos(rows, old).ok_or_else(|| gone(Entity::ZSetMember, old))?;
+                if let Member::ZSet { member, .. } = &mut rows[i] {
+                    *member = new.clone();
+                }
+            }
+            MemberOp::ZRemove(ms) => {
+                rows.retain(|r| !matches!(r, Member::ZSet { member, .. } if ms.contains(member)))
+            }
+        }
+        Ok(())
     }
 }
 

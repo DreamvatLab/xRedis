@@ -12,6 +12,8 @@ use xredis_core::config::{
     ConfigWarning, ConnId, ConnectionConfig, ConnectionDraft, SaveOutcome, Settings,
 };
 use xredis_core::conn::info::ConnectionInfo;
+use xredis_core::keys::KeyType;
+use xredis_core::members::WriteOp;
 use xredis_core::v1_import::ImportWarning;
 
 use crate::i18n::PackReport;
@@ -205,6 +207,11 @@ pub enum Msg {
         id: ConnId,
         msg: KeysMsg,
     },
+    // ---- 打开的 key(R-07b):值编辑器、成员表、新建 key、改名和改 TTL ----
+    View {
+        id: ConnId,
+        msg: crate::keyview::ViewMsg,
+    },
 }
 
 /// 要异步执行的后端操作,结果由 Runtime 变成 `Msg` 发回。
@@ -264,6 +271,37 @@ pub enum BackendCmd {
     PreviewPaste {
         id: ConnId,
         text: String,
+    },
+    // ---- 打开的 key(R-07b)。`generation` 是视图代号,结果带着它回来 ----
+    /// 取 key 的类型、长度、TTL(视图用)。
+    ViewDetails {
+        id: ConnId,
+        generation: u64,
+        key: Bytes,
+    },
+    /// 读 String 的值(超过 8 MiB 只读前 1 MiB)。
+    ViewReadString {
+        id: ConnId,
+        generation: u64,
+        key: Bytes,
+    },
+    /// 扫一批成员。`scan_generation` 是成员表自己的扫描代号。
+    ViewScan {
+        id: ConnId,
+        generation: u64,
+        scan_generation: u64,
+        key: Bytes,
+        kind: KeyType,
+        pattern: Bytes,
+        count: u32,
+        cursor: u64,
+    },
+    /// 依次执行一串写操作(保存、改名、改 TTL、删成员),第一个失败就停。
+    ViewApply {
+        id: ConnId,
+        generation: u64,
+        token: u64,
+        ops: Vec<WriteOp>,
     },
     PasteKeys {
         id: ConnId,

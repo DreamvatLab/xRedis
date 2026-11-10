@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use crate::backend::Backend;
+use crate::keyview::ViewMsg;
 use crate::msg::{BackendCmd, KeysMsg, Msg};
 
 pub struct Runtime {
@@ -142,6 +143,60 @@ pub async fn execute(backend: &dyn Backend, cmd: BackendCmd) -> Option<Msg> {
             msg: KeysMsg::PasteChecked {
                 result: backend.preview_paste(id, text.clone()).await,
                 text,
+            },
+        },
+        BackendCmd::ViewDetails {
+            id,
+            generation,
+            key,
+        } => Msg::View {
+            id,
+            msg: ViewMsg::Details {
+                generation,
+                result: backend.key_details(id, key).await,
+            },
+        },
+        BackendCmd::ViewReadString {
+            id,
+            generation,
+            key,
+        } => Msg::View {
+            id,
+            msg: ViewMsg::StringRead {
+                generation,
+                result: backend.read_string(id, key).await,
+            },
+        },
+        BackendCmd::ViewScan {
+            id,
+            generation,
+            scan_generation,
+            key,
+            kind,
+            pattern,
+            count,
+            cursor,
+        } => Msg::View {
+            id,
+            msg: ViewMsg::Members {
+                generation,
+                scan_generation,
+                result: backend
+                    .scan_members(id, key, kind, pattern, count, cursor)
+                    .await,
+            },
+        },
+        BackendCmd::ViewApply {
+            id,
+            generation,
+            token,
+            ops,
+        } => Msg::View {
+            id,
+            msg: ViewMsg::Applied {
+                generation,
+                token,
+                result: backend.apply_writes(id, ops).await,
             },
         },
         BackendCmd::PasteKeys {

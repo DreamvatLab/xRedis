@@ -12,9 +12,11 @@ use xredis_core::config::{
 };
 use xredis_core::conn::ConnManager;
 use xredis_core::conn::info::ConnectionInfo;
-use xredis_core::keys::{KeyDetails, ScanPage};
+use xredis_core::keys::{KeyDetails, KeyType, ScanPage};
 use xredis_core::keystore::{FallbackStore, KeyStore, KeyringStore};
+use xredis_core::members::{ApplyFailure, MemberPage, WriteOp};
 use xredis_core::transfer::{CopyOutcome, PasteOutcome, PastePreview};
+use xredis_core::types::string::StringValue;
 use xredis_core::v1_import::{import_v1_if_first_run, v1_config_path};
 
 use crate::msg::{ImportSummary, Saved, StartupData, StartupWarning};
@@ -47,6 +49,24 @@ pub trait Backend: Send + Sync + 'static {
     async fn delete_keys(&self, id: ConnId, keys: Vec<Bytes>) -> Result<u64>;
     async fn db_size(&self, id: ConnId) -> Result<u64>;
     async fn copy_keys(&self, id: ConnId, keys: Vec<Bytes>) -> Result<CopyOutcome>;
+    /// 读 String 的值;key 不存在是 `None`,超过 8 MiB 只读前 1 MiB。
+    async fn read_string(&self, id: ConnId, key: Bytes) -> Result<Option<StringValue>>;
+    /// 扫一批成员(Hash、List、Set、ZSet)。
+    async fn scan_members(
+        &self,
+        id: ConnId,
+        key: Bytes,
+        kind: KeyType,
+        pattern: Bytes,
+        count: u32,
+        cursor: u64,
+    ) -> Result<MemberPage>;
+    /// 依次执行写操作,第一个失败就停,`ApplyFailure::done` 是前面成功的步数。
+    async fn apply_writes(
+        &self,
+        id: ConnId,
+        ops: Vec<WriteOp>,
+    ) -> std::result::Result<(), ApplyFailure>;
     /// 粘贴前预检:解码并查每个 key 是否已存在。
     async fn preview_paste(&self, id: ConnId, text: String) -> Result<PastePreview>;
     async fn paste_keys(&self, id: ConnId, text: String, overwrite: bool) -> Result<PasteOutcome>;
@@ -240,6 +260,37 @@ impl Backend for CoreBackend {
     async fn copy_keys(&self, id: ConnId, keys: Vec<Bytes>) -> Result<CopyOutcome> {
         let pool = self.manager.pool(id).await?;
         xredis_core::transfer::copy_keys(&pool, &keys).await
+    }
+
+    async fn read_string(&self, id: ConnId, key: Bytes) -> Result<Option<StringValue>> {
+        let pool = self.manager.pool(id).await?;
+        xredis_core::types::string::get(&pool, &key).await
+    }
+
+    async fn scan_members(
+        &self,
+        id: ConnId,
+        key: Bytes,
+        kind: KeyType,
+        pattern: Bytes,
+        count: u32,
+        cursor: u64,
+    ) -> Result<MemberPage> {
+        let pool = self.manager.pool(id).await?;
+        xredis_core::members::scan_members(&pool, &key, &kind, &pattern, count, cursor).await
+    }
+
+    async fn apply_writes(
+        &self,
+        id: ConnId,
+        ops: Vec<WriteOp>,
+    ) -> std::result::Result<(), ApplyFailure> {
+        let pool = self
+            .manager
+            .pool(id)
+            .await
+            .map_err(|error| ApplyFailure { done: 0, error })?;
+        xredis_core::members::apply(&pool, &ops).await
     }
 
     async fn preview_paste(&self, id: ConnId, text: String) -> Result<PastePreview> {

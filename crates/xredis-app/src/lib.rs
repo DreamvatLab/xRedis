@@ -9,6 +9,7 @@ pub mod errors;
 pub mod forms;
 pub mod i18n;
 pub mod keylist;
+pub mod keyview;
 pub mod messages;
 pub mod msg;
 pub mod runtime;

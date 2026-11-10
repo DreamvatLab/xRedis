@@ -23,6 +23,11 @@ keyring = "4"
 magic-crypt = "5"
 tracing = "0.1"
 urlencoding = "2"
+# Redis 客户端:v1 用它踩平了重连和超时的坑;TLS 走 rustls
+fred = { version = "10", features = ["enable-rustls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+pem = "4"
+rustls-native-certs = "0.8"
 tempfile = "3"
 
 # 磁盘(AGENTS.md「环境和磁盘」):不要增量编译缓存;调试信息只留行号,依赖不带调试信息

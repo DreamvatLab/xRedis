@@ -25,3 +25,14 @@ pub const ORDINAL_MAX: i32 = 65535;
 
 /// 系统钥匙串里的 service 名。
 pub const KEYRING_SERVICE: &str = "xRedis";
+
+/// 重连退避:100ms 起,倍数 2,上限 10s,不限次数。
+pub const RECONNECT_MIN_DELAY_MS: u32 = 100;
+pub const RECONNECT_MAX_DELAY_MS: u32 = 10_000;
+pub const RECONNECT_BACKOFF_BASE: u32 = 2;
+/// 命令超时、建连超时。
+pub const COMMAND_TIMEOUT_MS: u64 = 15_000;
+pub const CONNECT_TIMEOUT_MS: u64 = 10_000;
+/// 半开连接探测:间隔、超时。
+pub const UNRESPONSIVE_INTERVAL_MS: u64 = 2_000;
+pub const UNRESPONSIVE_TIMEOUT_MS: u64 = 8_000;

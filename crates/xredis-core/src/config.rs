@@ -59,7 +59,7 @@ impl FromStr for ConnId {
     fn from_str(s: &str) -> Result<Self> {
         Ulid::from_string(s)
             .map(Self)
-            .map_err(|e| Error::Rule(format!("连接 id '{s}' 不合法: {e}")))
+            .map_err(|e| Error::Rule(format!("Invalid connection id '{s}': {e}")))
     }
 }
 
@@ -121,6 +121,13 @@ pub struct ConnectionDraft {
     pub password: PasswordChange,
 }
 
+/// [`ConfigStore::save_connection`] 的结果:连接已保存,`warnings` 是要显示给用户的提示(比如密码没存上)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaveOutcome {
+    pub id: ConnId,
+    pub warnings: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -173,7 +180,7 @@ impl ConfigStore {
     /// 目录建不出来(比如路径被文件占用)返回 `Err`,调用方自己决定怎么继续。
     pub fn open(dir: &Path, secrets: Arc<dyn KeyStore>) -> Result<(Self, Vec<String>)> {
         fs::create_dir_all(dir).map_err(|source| Error::Io {
-            action: "创建配置目录",
+            action: "create config directory",
             path: dir.to_path_buf(),
             source,
         })?;
@@ -184,11 +191,11 @@ impl ConfigStore {
                 Ok(config) => (config, false),
                 Err(err) => {
                     let detail = match backup_broken_file(&path) {
-                        Some(to) => format!("已备份为 {}", to.display()),
-                        None => "备份失败".to_string(),
+                        Some(to) => format!("it was saved as {}", to.display()),
+                        None => "backing it up failed".to_string(),
                     };
                     warnings.push(format!(
-                        "配置文件 {} 解析失败({err}),{detail},已用默认配置继续运行",
+                        "Config file {} could not be parsed ({err}); {detail}. Continuing with default settings.",
                         path.display()
                     ));
                     (ConfigFile::default(), false)
@@ -198,7 +205,7 @@ impl ConfigStore {
             Err(err) if err.kind() == io::ErrorKind::NotFound => (ConfigFile::default(), true),
             Err(source) => {
                 return Err(Error::Io {
-                    action: "读取配置文件",
+                    action: "read config file",
                     path,
                     source,
                 });
@@ -259,12 +266,12 @@ impl ConfigStore {
     pub fn save_settings(&self, new: &Settings) -> Result<()> {
         if !(SCAN_BATCH_MIN..=SCAN_BATCH_MAX).contains(&new.scan_batch) {
             return Err(Error::Rule(format!(
-                "单批数量必须在 {SCAN_BATCH_MIN} 到 {SCAN_BATCH_MAX} 之间"
+                "Batch size must be between {SCAN_BATCH_MIN} and {SCAN_BATCH_MAX}"
             )));
         }
         if new.auto_scan_limit > AUTO_SCAN_LIMIT_MAX {
             return Err(Error::Rule(format!(
-                "自动续扫上限不能超过 {AUTO_SCAN_LIMIT_MAX}"
+                "Auto-scan limit cannot exceed {AUTO_SCAN_LIMIT_MAX}"
             )));
         }
         self.mutate(|c| {
@@ -309,7 +316,7 @@ impl ConfigStore {
             .iter()
             .find(|c| c.id == id)
             .cloned()
-            .ok_or_else(|| Error::NotFound(format!("连接 {id}")))
+            .ok_or_else(|| Error::NotFound(format!("connection {id}")))
     }
 
     /// 连接密码(来自密钥存储);没设过返回 `None`。
@@ -318,7 +325,7 @@ impl ConfigStore {
     }
 
     /// 新建或编辑连接。先落配置,配置落盘成功后才动密码,配置失败时密码不变。
-    pub fn save_connection(&self, draft: ConnectionDraft) -> Result<ConnId> {
+    pub fn save_connection(&self, draft: ConnectionDraft) -> Result<SaveOutcome> {
         validate_draft(&draft)?;
         let now = now_ms();
         let username = draft.username.clone().filter(|u| !u.is_empty());
@@ -328,7 +335,7 @@ impl ConfigStore {
                     .connections
                     .iter_mut()
                     .find(|x| x.id == id)
-                    .ok_or_else(|| Error::NotFound(format!("连接 {id}")))?;
+                    .ok_or_else(|| Error::NotFound(format!("connection {id}")))?;
                 slot.name = draft.name.clone();
                 slot.host = draft.host.clone();
                 slot.port = draft.port;
@@ -355,13 +362,22 @@ impl ConfigStore {
                 Ok(id)
             }
         })?;
-        match &draft.password {
-            PasswordChange::Keep => {}
-            PasswordChange::Clear => self.secrets.delete(&id.to_string())?,
-            PasswordChange::Set(p) if p.is_empty() => self.secrets.delete(&id.to_string())?,
-            PasswordChange::Set(p) => self.secrets.set(&id.to_string(), p)?,
+        let account = id.to_string();
+        let password_result = match &draft.password {
+            PasswordChange::Keep => Ok(()),
+            PasswordChange::Clear => self.secrets.delete(&account),
+            PasswordChange::Set(p) if p.is_empty() => self.secrets.delete(&account),
+            PasswordChange::Set(p) => self.secrets.set(&account, p),
+        };
+        // 连接已经落盘,密码没存上不能当成保存失败(界面会重试造成重复连接),作为警告带回
+        let mut warnings = Vec::new();
+        if let Err(err) = password_result {
+            tracing::warn!("连接 {id} 已保存,但密码写入密钥存储失败: {err}");
+            warnings.push(format!(
+                "The connection was saved, but its password could not be stored: {err}"
+            ));
         }
-        Ok(id)
+        Ok(SaveOutcome { id, warnings })
     }
 
     /// 切库时先写配置(L-03:先写配置再清连接缓存)。
@@ -371,7 +387,7 @@ impl ConfigStore {
                 .connections
                 .iter_mut()
                 .find(|x| x.id == id)
-                .ok_or_else(|| Error::NotFound(format!("连接 {id}")))?;
+                .ok_or_else(|| Error::NotFound(format!("connection {id}")))?;
             slot.selected_db = db;
             Ok(())
         })
@@ -382,7 +398,7 @@ impl ConfigStore {
             let before = c.connections.len();
             c.connections.retain(|x| x.id != id);
             if c.connections.len() == before {
-                return Err(Error::NotFound(format!("连接 {id}")));
+                return Err(Error::NotFound(format!("connection {id}")));
             }
             Ok(())
         })?;
@@ -396,14 +412,14 @@ impl ConfigStore {
 
 fn validate_draft(d: &ConnectionDraft) -> Result<()> {
     if d.host.trim().is_empty() {
-        return Err(Error::Rule("Host 不能为空".into()));
+        return Err(Error::Rule("Host is required".into()));
     }
     if d.port == 0 {
-        return Err(Error::Rule("端口必须在 1 到 65535 之间".into()));
+        return Err(Error::Rule("Port must be between 1 and 65535".into()));
     }
     if !(ORDINAL_MIN..=ORDINAL_MAX).contains(&d.ordinal) {
         return Err(Error::Rule(format!(
-            "序号必须在 {ORDINAL_MIN} 到 {ORDINAL_MAX} 之间"
+            "Ordinal must be between {ORDINAL_MIN} and {ORDINAL_MAX}"
         )));
     }
     Ok(())
@@ -426,12 +442,12 @@ fn backup_broken_file(path: &Path) -> Option<PathBuf> {
 /// 原子写入:先写临时文件,再替换目标(`fs::rename` 在各平台都会覆盖已存在的目标)。
 fn persist(config: &ConfigFile, path: &Path) -> Result<()> {
     let json = serde_json::to_vec_pretty(config)
-        .map_err(|e| Error::Config(format!("序列化配置失败: {e}")))?;
+        .map_err(|e| Error::Config(format!("Failed to serialize config: {e}")))?;
     let tmp = path.with_extension("json.tmp");
     if let Err(source) = fs::write(&tmp, &json) {
         let _ = fs::remove_file(&tmp);
         return Err(Error::Io {
-            action: "写入临时文件",
+            action: "write temporary file",
             path: tmp,
             source,
         });
@@ -439,7 +455,7 @@ fn persist(config: &ConfigFile, path: &Path) -> Result<()> {
     if let Err(source) = fs::rename(&tmp, path) {
         let _ = fs::remove_file(&tmp);
         return Err(Error::Io {
-            action: "替换配置文件",
+            action: "replace config file",
             path: path.to_path_buf(),
             source,
         });
@@ -583,7 +599,7 @@ mod tests {
         let handles: Vec<_> = (0..8)
             .map(|i| {
                 let s = store.clone();
-                std::thread::spawn(move || s.save_connection(draft(&format!("c{i}"))).unwrap())
+                std::thread::spawn(move || s.save_connection(draft(&format!("c{i}"))).unwrap().id)
             })
             .collect();
         for h in handles {
@@ -600,7 +616,7 @@ mod tests {
         let (store, _) = ConfigStore::open(tmp.path(), secrets.clone()).unwrap();
         let mut d = draft("a");
         d.password = PasswordChange::Set("sup3r-s3cret-pw".into());
-        let id = store.save_connection(d).unwrap();
+        let id = store.save_connection(d).unwrap().id;
         let text = fs::read_to_string(tmp.path().join("config.json")).unwrap();
         assert!(!text.contains("sup3r-s3cret-pw"));
         assert!(!text.to_lowercase().contains("password"));
@@ -616,7 +632,7 @@ mod tests {
         let store = open(tmp.path());
         let mut d = draft("a");
         d.password = PasswordChange::Set("pw1".into());
-        let id = store.save_connection(d).unwrap();
+        let id = store.save_connection(d).unwrap().id;
         let edit = |change| ConnectionDraft {
             id: Some(id),
             password: change,
@@ -649,7 +665,7 @@ mod tests {
         let store = open(tmp.path());
         let mut d = draft("a");
         d.password = PasswordChange::Set("old".into());
-        let id = store.save_connection(d).unwrap();
+        let id = store.save_connection(d).unwrap().id;
         fs::create_dir(tmp.path().join("config.json.tmp")).unwrap();
         let mut d2 = draft("a");
         d2.id = Some(id);
@@ -658,13 +674,50 @@ mod tests {
         assert_eq!(store.password(id).unwrap().as_deref(), Some("old"));
     }
 
+    /// 密码写失败时连接已落盘,不能返回 Err(界面会重试造成重复连接),要作为警告带回。
+    #[test]
+    fn password_write_failure_is_a_warning_not_an_error() {
+        struct FailingStore;
+        impl KeyStore for FailingStore {
+            fn get(&self, _: &str) -> Result<Option<String>> {
+                Ok(None)
+            }
+            fn set(&self, _: &str, _: &str) -> Result<()> {
+                Err(Error::KeyStore("locked".into()))
+            }
+            fn delete(&self, _: &str) -> Result<()> {
+                Err(Error::KeyStore("locked".into()))
+            }
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let (store, _) = ConfigStore::open(tmp.path(), Arc::new(FailingStore)).unwrap();
+        let mut d = draft("a");
+        d.password = PasswordChange::Set("pw".into());
+        let out = store.save_connection(d).unwrap();
+        assert_eq!(out.warnings.len(), 1, "{:?}", out.warnings);
+        assert!(out.warnings[0].contains("locked"));
+        // 连接确实已保存,且只有一条
+        assert_eq!(store.connections().len(), 1);
+        assert_eq!(store.connection(out.id).unwrap().name, "a");
+        // 编辑时清密码失败同样是警告
+        let mut d2 = draft("a");
+        d2.id = Some(out.id);
+        d2.password = PasswordChange::Clear;
+        let out2 = store.save_connection(d2).unwrap();
+        assert_eq!(out2.warnings.len(), 1);
+        assert_eq!(store.connections().len(), 1);
+        // 没碰密码时没有警告
+        let ok = store.save_connection(draft("b")).unwrap();
+        assert!(ok.warnings.is_empty());
+    }
+
     #[test]
     fn delete_removes_connection_and_password() {
         let tmp = tempfile::tempdir().unwrap();
         let store = open(tmp.path());
         let mut d = draft("a");
         d.password = PasswordChange::Set("pw".into());
-        let id = store.save_connection(d).unwrap();
+        let id = store.save_connection(d).unwrap().id;
         store.delete_connection(id).unwrap();
         assert!(store.connections().is_empty());
         assert_eq!(store.password(id).unwrap(), None);
@@ -683,9 +736,9 @@ mod tests {
             ordinal,
             ..draft(name)
         };
-        let a = store.save_connection(mk("a", 5)).unwrap();
-        let b = store.save_connection(mk("b", 1)).unwrap();
-        let c = store.save_connection(mk("c", 5)).unwrap();
+        let a = store.save_connection(mk("a", 5)).unwrap().id;
+        let b = store.save_connection(mk("b", 1)).unwrap().id;
+        let c = store.save_connection(mk("c", 5)).unwrap().id;
         // 让 a 的更新时间最新
         store
             .mutate(|cfg| {
@@ -705,7 +758,7 @@ mod tests {
     fn edit_keeps_selected_db_and_created_time() {
         let tmp = tempfile::tempdir().unwrap();
         let store = open(tmp.path());
-        let id = store.save_connection(draft("a")).unwrap();
+        let id = store.save_connection(draft("a")).unwrap().id;
         store.set_selected_db(id, 3).unwrap();
         let created = store.connection(id).unwrap().created_on_utc;
         store

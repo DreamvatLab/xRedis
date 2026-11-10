@@ -102,14 +102,14 @@ pub fn import_v1_if_first_run(store: &ConfigStore, v1_path: &Path) -> Result<Opt
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(source) => {
             return Err(Error::Io {
-                action: "读取 v1 配置",
+                action: "read v1 config",
                 path: v1_path.to_path_buf(),
                 source,
             });
         }
     };
     let v1: V1File = serde_json::from_slice(&bytes)
-        .map_err(|e| Error::Import(format!("{} 解析失败: {e}", v1_path.display())))?;
+        .map_err(|e| Error::Import(format!("{} could not be parsed: {e}", v1_path.display())))?;
 
     let mut report = ImportReport::default();
     let mut connections = Vec::new();
@@ -125,16 +125,17 @@ pub fn import_v1_if_first_run(store: &ConfigStore, v1_path: &Path) -> Result<Opt
             Err(_) => {
                 report
                     .warnings
-                    .push(format!("连接 {label} 的 id 不合法,已跳过"));
+                    .push(format!("Skipped connection {label}: invalid id"));
                 continue;
             }
         };
         let port = match u16::try_from(c.port) {
             Ok(p) if p != 0 => p,
             _ => {
-                report
-                    .warnings
-                    .push(format!("连接 {label} 的端口 {} 不合法,已跳过", c.port));
+                report.warnings.push(format!(
+                    "Skipped connection {label}: invalid port {}",
+                    c.port
+                ));
                 continue;
             }
         };
@@ -144,7 +145,7 @@ pub fn import_v1_if_first_run(store: &ConfigStore, v1_path: &Path) -> Result<Opt
                 Some(_) => {}
                 None => report
                     .warnings
-                    .push(format!("连接 {label} 的密码解密失败,已跳过,请重新输入")),
+                    .push(format!("Password of connection {label} could not be decrypted and was skipped; please enter it again")),
             }
         }
         let tls = (c.tls == Some(true)).then(|| TlsConfig {
@@ -184,9 +185,9 @@ pub fn import_v1_if_first_run(store: &ConfigStore, v1_path: &Path) -> Result<Opt
 
     for (id, plain) in passwords {
         if let Err(err) = store.secrets().set(&id.to_string(), &plain) {
-            report
-                .warnings
-                .push(format!("连接 {id} 的密码存入密钥存储失败: {err}"));
+            report.warnings.push(format!(
+                "Password of connection {id} could not be saved to the key store: {err}"
+            ));
         }
     }
     Ok(Some(report))

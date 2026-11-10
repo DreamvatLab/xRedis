@@ -15,6 +15,10 @@ keyring.workspace = true
 magic-crypt.workspace = true
 tracing.workspace = true
 urlencoding.workspace = true
+fred.workspace = true
+tokio.workspace = true
+pem.workspace = true
+rustls-native-certs.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

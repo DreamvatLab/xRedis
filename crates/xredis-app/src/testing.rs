@@ -13,7 +13,7 @@ use xredis_core::config::{ConfigStore, ConnId, ConnectionConfig, ConnectionDraft
 use xredis_core::conn::info::{ConnectionInfo, KeyspaceInfo};
 use xredis_core::keys::{KeyDetails, KeyType, ScanPage, Ttl};
 use xredis_core::keystore::MemoryStore;
-use xredis_core::transfer::{ClipboardEntry, CopyOutcome, PasteOutcome};
+use xredis_core::transfer::{ClipboardEntry, CopyOutcome, PasteOutcome, PastePreview};
 use xredis_core::{Error, Result};
 
 use crate::backend::Backend;
@@ -348,6 +348,20 @@ impl Backend for FakeBackend {
             text: xredis_core::transfer::encode(&entries)?,
             copied: entries.len(),
             skipped,
+        })
+    }
+
+    async fn preview_paste(&self, id: ConnId, text: String) -> Result<PastePreview> {
+        self.enter("preview_paste", format!("{id}")).await?;
+        let entries = xredis_core::transfer::decode(&text)?;
+        let c = self.ctl.lock().unwrap();
+        let existing = entries
+            .iter()
+            .filter(|e| c.keyspace.contains_key(e.id.as_bytes()))
+            .count();
+        Ok(PastePreview {
+            total: entries.len(),
+            existing,
         })
     }
 

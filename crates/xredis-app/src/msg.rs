@@ -260,6 +260,11 @@ pub enum BackendCmd {
         id: ConnId,
         keys: Vec<Bytes>,
     },
+    /// 粘贴前预检:解码剪贴板,查每个 key 是否已存在(R-07d)。
+    PreviewPaste {
+        id: ConnId,
+        text: String,
+    },
     PasteKeys {
         id: ConnId,
         text: String,

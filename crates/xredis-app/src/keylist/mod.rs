@@ -20,7 +20,7 @@ use xredis_core::config::{ConnId, Settings};
 use xredis_core::consts::{CLIPBOARD_PREFIX, POOL_SIZE};
 use xredis_core::error::Skipped;
 use xredis_core::keys::{KeyDetails, KeyType, ScanPage, Ttl};
-use xredis_core::transfer::{CopyOutcome, PasteOutcome};
+use xredis_core::transfer::{CopyOutcome, PasteOutcome, PastePreview};
 use xredis_core::{Error, Result};
 
 use crate::errors::describe;
@@ -80,6 +80,11 @@ pub enum KeysMsg {
     Copied(Result<CopyOutcome>),
     ClipboardWritten(std::result::Result<(), String>),
     ClipboardRead(std::result::Result<String, String>),
+    /// 粘贴预检的结果(R-07d)。
+    PasteChecked {
+        text: String,
+        result: Result<PastePreview>,
+    },
     Pasted(Result<PasteOutcome>),
 }
 
@@ -95,6 +100,7 @@ impl KeysMsg {
                 | KeysMsg::Copied(_)
                 | KeysMsg::ClipboardWritten(_)
                 | KeysMsg::ClipboardRead(_)
+                | KeysMsg::PasteChecked { .. }
                 | KeysMsg::Pasted(_)
         )
     }
@@ -222,6 +228,29 @@ pub struct PasteConfirm {
     pub text: String,
     /// 覆盖同名 key。**默认不勾**(v1 后端有这个能力但界面总是覆盖)。
     pub overwrite: bool,
+    /// 剪贴板里共几个 key。
+    pub total: usize,
+    /// 其中当前库已存在的个数。为 0 时界面不显示“覆盖同名 key”选项。
+    pub existing: usize,
+}
+
+impl PasteConfirm {
+    /// 界面要不要显示“覆盖同名 key”:只有确实有同名 key 时才显示。
+    pub fn can_overwrite(&self) -> bool {
+        self.existing > 0
+    }
+
+    /// 确认框的统计行:“共 N 个,其中 M 个已存在”。
+    pub fn summary(&self, lang: &str) -> String {
+        tr_with(
+            lang,
+            "keys.paste_summary",
+            &[
+                ("total", &self.total.to_string()),
+                ("existing", &self.existing.to_string()),
+            ],
+        )
+    }
 }
 
 /// 调用方给的上下文。
@@ -485,7 +514,8 @@ impl KeyList {
                 }
             }
             KeysMsg::SetPasteOverwrite(on) => {
-                if let Some(p) = &mut self.paste {
+                // 没有同名 key 时界面不显示这个选项,也不接受它
+                if let Some(p) = self.paste.as_mut().filter(|p| p.existing > 0) {
                     p.overwrite = on;
                 }
             }
@@ -519,6 +549,9 @@ impl KeyList {
             KeysMsg::Copied(result) => self.on_copied(ctx, result, &mut out),
             KeysMsg::ClipboardWritten(result) => self.on_clipboard_written(ctx, result, &mut out),
             KeysMsg::ClipboardRead(result) => self.on_clipboard_read(ctx, result, &mut out),
+            KeysMsg::PasteChecked { text, result } => {
+                self.on_paste_checked(ctx, text, result, &mut out)
+            }
             KeysMsg::Pasted(result) => self.on_pasted(ctx, result, &mut out),
         }
         out
@@ -910,12 +943,36 @@ impl KeyList {
                 describe(ctx.lang, &Error::ClipboardNotRedis),
                 true,
             ),
+            // 先让后端解码并查冲突,再弹确认框;解码失败、超限直接报错,不弹框(R-07d)
             Ok(text) => {
+                self.busy = Some(Busy::Pasting);
+                out.cmds
+                    .push(Cmd::Backend(BackendCmd::PreviewPaste { id: ctx.id, text }));
+            }
+        }
+    }
+
+    fn on_paste_checked(
+        &mut self,
+        ctx: &Ctx,
+        text: String,
+        result: Result<PastePreview>,
+        out: &mut Out,
+    ) {
+        if self.busy != Some(Busy::Pasting) {
+            return;
+        }
+        self.busy = None;
+        match result {
+            Ok(p) => {
                 self.paste = Some(PasteConfirm {
                     text,
                     overwrite: false,
+                    total: p.total,
+                    existing: p.existing,
                 });
             }
+            Err(err) => out.note(Level::Error, describe(ctx.lang, &err), true),
         }
     }
 

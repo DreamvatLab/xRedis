@@ -177,6 +177,29 @@ pub struct PasteOutcome {
     pub count: usize,
 }
 
+/// 粘贴前的预检结果:剪贴板里共几个 key,其中几个在当前库已存在(给确认框用)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PastePreview {
+    pub total: usize,
+    pub existing: usize,
+}
+
+/// 解码剪贴板并对每个 key 执行 `EXISTS`。解码失败(不是 REDIS: 数据、损坏、超限)原样返回错误,
+/// 这时不该弹确认框。只读,不写任何东西。
+pub async fn preview(pool: &Pool, text: &str) -> Result<PastePreview> {
+    let entries = decode(text)?;
+    let mut existing = 0;
+    for e in &entries {
+        if exists(pool, e.id.as_bytes()).await? {
+            existing += 1;
+        }
+    }
+    Ok(PastePreview {
+        total: entries.len(),
+        existing,
+    })
+}
+
 /// 粘贴:校验前缀,解压封顶 256 MiB;不覆盖模式下先检查**所有** key 是否存在,有冲突整体拒绝
 /// 并列出,一个都不写(避免写到一半留下半成品);然后逐个 `RESTORE key ttl_ms value [REPLACE]`。
 pub async fn paste(pool: &Pool, text: &str, overwrite: bool) -> Result<PasteOutcome> {

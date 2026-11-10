@@ -321,6 +321,8 @@ keys.copied:
   en: "Copied %{count} key(s) to the clipboard."
 keys.copy_skipped:
   en: "Skipped %{count} key(s) that no longer exist or cannot be copied: %{keys}"
+keys.paste_summary:
+  en: "%{total} key(s) in the clipboard, %{existing} of them already exist."
 keys.pasted:
   en: "Pasted %{count} key(s) from the clipboard."
 err.clipboard_write:

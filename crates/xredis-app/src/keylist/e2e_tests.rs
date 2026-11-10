@@ -321,6 +321,8 @@ async fn copy_delete_paste_round_trip_with_the_overwrite_option() {
     settle(&mut h, 100).await;
     let p = list(&h, id).paste.clone().expect("a paste confirmation");
     assert!(!p.overwrite, "not overwriting by default");
+    assert_eq!((p.total, p.existing), (3, 0), "the three were deleted");
+    assert!(!p.can_overwrite(), "nothing to overwrite: option hidden");
     send(&mut h, id, KeysMsg::ConfirmPaste);
     settle(&mut h, 200).await;
     assert_eq!(fake.keyspace_len(), 5);
@@ -334,6 +336,9 @@ async fn copy_delete_paste_round_trip_with_the_overwrite_option() {
     // 再粘贴一次,不覆盖:整体拒绝并列出冲突,一个都没写
     send(&mut h, id, KeysMsg::PasteRequested);
     settle(&mut h, 100).await;
+    let p = list(&h, id).paste.clone().expect("a paste confirmation");
+    assert_eq!((p.total, p.existing), (3, 3));
+    assert!(p.can_overwrite());
     send(&mut h, id, KeysMsg::ConfirmPaste);
     settle(&mut h, 200).await;
     let texts = message_texts(&h);

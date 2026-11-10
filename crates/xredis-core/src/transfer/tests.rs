@@ -310,6 +310,38 @@ mod redis {
         .await;
     }
 
+    /// R-07d:粘贴预检只读:数出已存在的 key,不写任何东西;不是 REDIS: 数据直接报错。
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "needs redis"]
+    async fn r07d_preview_counts_existing_keys_and_writes_nothing() {
+        run(|fx| async move {
+            let (a, b, c) = (fx.key("a"), fx.key("b"), fx.key("c"));
+            for (k, v) in [(&a, "A"), (&b, "B"), (&c, "C")] {
+                put(&fx, k, v.as_bytes()).await;
+            }
+            let text = copy_keys(&fx.pool, &[a.clone(), b.clone(), c.clone()])
+                .await
+                .unwrap()
+                .text;
+            keys::delete_keys(&fx.pool, std::slice::from_ref(&b))
+                .await
+                .unwrap();
+            let p = preview(&fx.pool, &text).await.unwrap();
+            assert_eq!((p.total, p.existing), (3, 2));
+            assert!(!keys::exists(&fx.pool, &b).await.unwrap(), "read-only");
+
+            keys::delete_keys(&fx.pool, &[a, c]).await.unwrap();
+            let p = preview(&fx.pool, &text).await.unwrap();
+            assert_eq!((p.total, p.existing), (3, 0));
+
+            assert!(matches!(
+                preview(&fx.pool, "hello").await,
+                Err(Error::ClipboardNotRedis)
+            ));
+        })
+        .await;
+    }
+
     /// L-09、P-42:不覆盖模式下有冲突就**整体拒绝**,列出冲突的 key,一个都不写,已有的值不变。
     #[tokio::test(flavor = "multi_thread")]
     #[ignore = "needs redis"]

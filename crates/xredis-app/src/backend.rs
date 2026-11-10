@@ -14,7 +14,7 @@ use xredis_core::conn::ConnManager;
 use xredis_core::conn::info::ConnectionInfo;
 use xredis_core::keys::{KeyDetails, ScanPage};
 use xredis_core::keystore::{FallbackStore, KeyStore, KeyringStore};
-use xredis_core::transfer::{CopyOutcome, PasteOutcome};
+use xredis_core::transfer::{CopyOutcome, PasteOutcome, PastePreview};
 use xredis_core::v1_import::{import_v1_if_first_run, v1_config_path};
 
 use crate::msg::{ImportSummary, Saved, StartupData, StartupWarning};
@@ -47,6 +47,8 @@ pub trait Backend: Send + Sync + 'static {
     async fn delete_keys(&self, id: ConnId, keys: Vec<Bytes>) -> Result<u64>;
     async fn db_size(&self, id: ConnId) -> Result<u64>;
     async fn copy_keys(&self, id: ConnId, keys: Vec<Bytes>) -> Result<CopyOutcome>;
+    /// 粘贴前预检:解码并查每个 key 是否已存在。
+    async fn preview_paste(&self, id: ConnId, text: String) -> Result<PastePreview>;
     async fn paste_keys(&self, id: ConnId, text: String, overwrite: bool) -> Result<PasteOutcome>;
 }
 
@@ -238,6 +240,11 @@ impl Backend for CoreBackend {
     async fn copy_keys(&self, id: ConnId, keys: Vec<Bytes>) -> Result<CopyOutcome> {
         let pool = self.manager.pool(id).await?;
         xredis_core::transfer::copy_keys(&pool, &keys).await
+    }
+
+    async fn preview_paste(&self, id: ConnId, text: String) -> Result<PastePreview> {
+        let pool = self.manager.pool(id).await?;
+        xredis_core::transfer::preview(&pool, &text).await
     }
 
     async fn paste_keys(&self, id: ConnId, text: String, overwrite: bool) -> Result<PasteOutcome> {

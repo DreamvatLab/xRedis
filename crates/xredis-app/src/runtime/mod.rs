@@ -137,6 +137,13 @@ pub async fn execute(backend: &dyn Backend, cmd: BackendCmd) -> Option<Msg> {
             id,
             msg: KeysMsg::Copied(backend.copy_keys(id, keys).await),
         },
+        BackendCmd::PreviewPaste { id, text } => Msg::Keys {
+            id,
+            msg: KeysMsg::PasteChecked {
+                result: backend.preview_paste(id, text.clone()).await,
+                text,
+            },
+        },
         BackendCmd::PasteKeys {
             id,
             text,

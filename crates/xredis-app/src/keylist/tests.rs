@@ -4,6 +4,7 @@
 
 use xredis_core::Error;
 use xredis_core::error::{SkipReason, Skipped};
+use xredis_core::transfer::PastePreview;
 
 use super::*;
 
@@ -1245,6 +1246,13 @@ fn a_failed_copy_reports_the_reason() {
 // 粘贴(P-42、L-13)
 // ---------------------------------------------------------------------------
 
+fn checked(total: usize, existing: usize) -> KeysMsg {
+    KeysMsg::PasteChecked {
+        text: "REDIS:abc".into(),
+        result: Ok(PastePreview { total, existing }),
+    }
+}
+
 /// P-42:粘贴先读剪贴板;不是 `REDIS:` 开头的直接提示,不弹确认框。
 #[test]
 fn p42_pasting_something_that_is_not_redis_data_is_rejected() {
@@ -1275,6 +1283,96 @@ fn l13_a_clipboard_read_failure_is_reported() {
     assert!(last_note(&out).text.contains("the clipboard is busy"));
 }
 
+/// R-07d:读到 `REDIS:` 数据后不直接弹框,先让后端解码并查冲突(`PreviewPaste`),
+/// 预检结果回来才弹,框里带“共 N 个,其中 M 个已存在”。
+#[test]
+fn r07d_the_confirmation_waits_for_the_preview_and_shows_the_counts() {
+    let mut h = H::new();
+    h.search_with(&["a"], 0);
+    h.send(KeysMsg::PasteRequested);
+    let out = h.send(KeysMsg::ClipboardRead(Ok("REDIS:abc".into())));
+    assert!(matches!(
+        backend(&out)[..],
+        [BackendCmd::PreviewPaste { .. }]
+    ));
+    assert!(h.list.paste.is_none(), "no dialog before the preview");
+    assert_eq!(h.list.busy, Some(Busy::Pasting));
+
+    h.send(checked(5, 2));
+    let p = h.list.paste.clone().expect("a confirmation");
+    assert_eq!((p.total, p.existing), (5, 2));
+    assert!(p.can_overwrite());
+    assert_eq!(h.list.busy, None);
+    let text = p.summary("en");
+    assert!(
+        text.contains('5') && text.contains('2') && text.contains("already exist"),
+        "{text}"
+    );
+}
+
+/// R-07d:没有同名 key 时不显示“覆盖同名 key”,也不接受把它打开。
+#[test]
+fn r07d_no_overwrite_option_when_nothing_exists() {
+    let mut h = H::new();
+    h.search_with(&["a"], 0);
+    h.send(KeysMsg::PasteRequested);
+    h.send(KeysMsg::ClipboardRead(Ok("REDIS:abc".into())));
+    h.send(checked(3, 0));
+    assert!(!h.list.paste.as_ref().unwrap().can_overwrite());
+    h.send(KeysMsg::SetPasteOverwrite(true));
+    assert!(!h.list.paste.as_ref().unwrap().overwrite);
+    let out = h.send(KeysMsg::ConfirmPaste);
+    assert!(matches!(
+        backend(&out)[..],
+        [BackendCmd::PasteKeys {
+            overwrite: false,
+            ..
+        }]
+    ));
+}
+
+/// R-07d:解码失败或超限:立即报错,不弹框,不再忙。
+#[test]
+fn r07d_preview_failures_are_reported_without_a_dialog() {
+    for (err, needle) in [
+        (Error::ClipboardNotRedis, "does not contain Redis data"),
+        (Error::PasteTooLarge { limit: 1024 * 1024 }, "paste limit"),
+        (
+            Error::ClipboardCorrupt {
+                stage: xredis_core::error::ClipboardStage::Base64,
+                detail: "bad".into(),
+            },
+            "bad",
+        ),
+    ] {
+        let mut h = H::new();
+        h.search_with(&["a"], 0);
+        h.send(KeysMsg::PasteRequested);
+        h.send(KeysMsg::ClipboardRead(Ok("REDIS:abc".into())));
+        let out = h.send(KeysMsg::PasteChecked {
+            text: "REDIS:abc".into(),
+            result: Err(err),
+        });
+        assert!(h.list.paste.is_none());
+        assert_eq!(h.list.busy, None);
+        assert_eq!(last_note(&out).level, Level::Error);
+        assert!(
+            last_note(&out).text.contains(needle),
+            "{}",
+            last_note(&out).text
+        );
+    }
+}
+
+/// R-07d:迟到的预检结果(忙状态已被别的流程清掉)不能凭空弹框。
+#[test]
+fn r07d_a_stray_preview_result_does_not_open_a_dialog() {
+    let mut h = H::new();
+    h.search_with(&["a"], 0);
+    h.send(checked(3, 1));
+    assert!(h.list.paste.is_none());
+}
+
 /// P-42 的差别:确认框有“覆盖同名 key”选项,**默认不勾**(v1 界面总是覆盖);确认后带着选择发给后端。
 #[test]
 fn p42_the_paste_confirmation_defaults_to_not_overwriting() {
@@ -1282,6 +1380,7 @@ fn p42_the_paste_confirmation_defaults_to_not_overwriting() {
     h.search_with(&["a"], 0);
     h.send(KeysMsg::PasteRequested);
     h.send(KeysMsg::ClipboardRead(Ok("REDIS:abc".into())));
+    h.send(checked(3, 2));
     let p = h.list.paste.clone().expect("a confirmation");
     assert!(!p.overwrite, "must not overwrite by default");
     assert_eq!(
@@ -1309,6 +1408,7 @@ fn p42_the_paste_confirmation_defaults_to_not_overwriting() {
     h.search_with(&["a"], 0);
     h.send(KeysMsg::PasteRequested);
     h.send(KeysMsg::ClipboardRead(Ok("REDIS:abc".into())));
+    h.send(checked(3, 2));
     h.send(KeysMsg::SetPasteOverwrite(true));
     let out = h.send(KeysMsg::ConfirmPaste);
     assert!(matches!(
@@ -1324,6 +1424,7 @@ fn p42_the_paste_confirmation_defaults_to_not_overwriting() {
     h.search_with(&["a"], 0);
     h.send(KeysMsg::PasteRequested);
     h.send(KeysMsg::ClipboardRead(Ok("REDIS:abc".into())));
+    h.send(checked(3, 2));
     h.send(KeysMsg::CancelPaste);
     assert!(h.list.paste.is_none() && h.list.busy.is_none());
     assert!(h.send(KeysMsg::ConfirmPaste).cmds.is_empty());
@@ -1336,6 +1437,7 @@ fn p42_a_successful_paste_refreshes_the_count_and_searches_again() {
     h.search_with(&["a"], 0);
     h.send(KeysMsg::PasteRequested);
     h.send(KeysMsg::ClipboardRead(Ok("REDIS:abc".into())));
+    h.send(checked(3, 2));
     h.send(KeysMsg::ConfirmPaste);
     let out = h.send(KeysMsg::Pasted(Ok(PasteOutcome { count: 4 })));
     assert_eq!(last_note(&out).text, "Pasted 4 key(s) from the clipboard.");
@@ -1362,6 +1464,7 @@ fn p42_paste_failures_report_and_refresh_only_when_something_was_written() {
     let paste = |h: &mut H| {
         h.send(KeysMsg::PasteRequested);
         h.send(KeysMsg::ClipboardRead(Ok("REDIS:abc".into())));
+        h.send(checked(3, 2));
         h.send(KeysMsg::ConfirmPaste);
     };
     paste(&mut h);

@@ -101,7 +101,11 @@ async fn core_backend_key_operations_against_a_real_redis() {
         assert_eq!(backend.delete_keys(id, three.clone()).await.unwrap(), 3);
         assert_eq!(backend.key_details(id, key("k01")).await.unwrap().ttl, Ttl::Missing);
 
+        let before = backend.preview_paste(id, copied.text.clone()).await.unwrap();
+        assert_eq!((before.total, before.existing), (3, 0));
         let pasted = backend.paste_keys(id, copied.text.clone(), false).await.unwrap();
+        let after = backend.preview_paste(id, copied.text.clone()).await.unwrap();
+        assert_eq!((after.total, after.existing), (3, 3));
         assert_eq!(pasted.count, 3);
         assert_eq!(backend.key_details(id, key("k02")).await.unwrap().kind, KeyType::String);
         let conflict = backend.paste_keys(id, copied.text.clone(), false).await.unwrap_err();

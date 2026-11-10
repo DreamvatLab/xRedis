@@ -142,6 +142,18 @@ impl App {
 
 判断方法:换成另一个 GUI 库时要重写的只能是 `xredis-gpui`;如果某段逻辑换 GUI 时还得照抄一遍,它就该在 App 里。
 
+## 多语言(作者 2026-11-10)
+
+界面文字做成**语言包**,默认英文,用户可以自己加语言包。不自己造轮子,用 **`rust-i18n` 4**:gpui-component 自己就用它(同一家公司 longbridge 的库),`rust_i18n::set_locale` 一次切换我们的文字和组件库自带的文字(组件库内置 en、zh-CN、zh-HK、zh-TW、pt-BR、ru)。
+
+- **内置英文**:`crates/xredis-app/locales/app.yml`(rust-i18n 的 `_version: 2` 格式,key 下按语言列翻译),编译时嵌入。内置包只有 `en`。
+- **用户语言包**:放在配置目录的 `locales/` 下(Windows 是 `%LOCALAPPDATA%\xRedis\v2\locales\`),格式和内置包相同,一个文件可以带一种或多种语言。启动时用 rust-i18n 自带的加载函数(`rust_i18n_support::try_load_locales`,`codegen` 特性)读进 `SimpleBackend`,通过 `i18n!("locales", fallback = "en", backend = ...)` 叠加在内置包之上。我们只写把两者接起来的几十行,不写解析器。
+- **缺的 key 回落英文**;语言包格式错误时跳过这个文件,在消息栏提示文件名和原因,不影响启动。
+- **切换**:设置里的语言下拉框列出内置和语言包里的所有语言,默认英文,选择保存在配置里,切换后界面立即刷新。
+- **翻译只有一处**:所有界面文字的 key 和英文都在 `xredis-app/locales/app.yml`;`xredis-gpui` 不建自己的语言文件,通过 `xredis-app` 提供的函数取文字(`t!` 宏展开到调用方 crate,所以由 `xredis-app` 包一层函数给 GUI 用)。
+- **core 不拼给用户看的句子**:`xredis-core` 的错误带结构化数据(哪种错误、哪个字段、哪个文件、Redis 原始报错),`Display` 的英文只用于日志;给用户看的文字由 `xredis-app` 按错误类型翻译。R-02a 改成英文的文案保留作日志用,R-06 加翻译。
+- **提供模板**:设置里可以"导出语言包模板"(把全部 key 和英文写成一个 yml 文件),用户照着翻。测试保证代码里用到的每个 key 在 `en` 里都有。
+
 ## xredis-gpui
 
 - 一个 `Entity<AppModel>` 持有 `xredis_app::App` 和 `Runtime`。`dispatch(msg)` 调 `App::update`,执行返回的 Cmd,然后 `cx.notify()`。

@@ -1,0 +1,17 @@
+[package]
+name = "xredis-gpui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "xredis"
+path = "src/main.rs"
+
+[dependencies]
+xredis-app = { path = "../xredis-app" }
+gpui-kit = "=0.9.1"
+
+[dev-dependencies]
+gpui-kit = { version = "=0.9.1", features = ["test-support"] }

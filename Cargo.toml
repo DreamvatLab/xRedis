@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = ["crates/xredis-core", "crates/xredis-app", "crates/xredis-gpui"]
+
+[workspace.package]
+version = "2.0.0-dev"
+edition = "2024"
+license = "UNLICENSED"
+publish = false
+
+# 磁盘(AGENTS.md「环境和磁盘」):不要增量编译缓存;调试信息只留行号,依赖不带调试信息
+[profile.dev]
+incremental = false
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = true

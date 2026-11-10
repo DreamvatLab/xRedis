@@ -11,6 +11,7 @@ use fred::interfaces::ClientLike;
 use ulid::Ulid;
 
 use super::*;
+use crate::config::TlsConfig;
 use crate::conn::testutil::*;
 
 async fn ping(pool: &Pool) -> std::result::Result<String, fred::error::Error> {
@@ -383,6 +384,345 @@ async fn l01_recovers_after_container_restart() {
             tokio::time::sleep(Duration::from_millis(300)).await;
         }
         env.manager.close(env.id).await.unwrap();
+    })
+    .await;
+}
+
+// ---------------------------------------------------------------------------
+// R-03a:已连上之后服务器失联时关闭和切库;关闭或失败后不留还在重连的客户端
+// ---------------------------------------------------------------------------
+
+fn docker(args: &[&str]) -> bool {
+    std::process::Command::new("docker")
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// 不管测试怎么结束,都把测试容器恢复成运行状态(只动测试容器)。
+struct RestoreContainer;
+
+impl Drop for RestoreContainer {
+    fn drop(&mut self) {
+        docker(&["unpause", TEST_CONTAINER]);
+        docker(&["start", TEST_CONTAINER]);
+    }
+}
+
+/// 用 `docker exec redis-cli` 读服务端的 `total_connections_received`。每次观察自己会新增
+/// 恰好一个连接,所以两次观察之间如果有别的客户端连进来,差值就会大于 1。
+/// 密码走环境变量,不出现在命令行上。
+fn observe_total_connections() -> Option<u64> {
+    let password = test_redis_creds().password.unwrap_or_default();
+    let out = std::process::Command::new("docker")
+        .args([
+            "exec",
+            "-e",
+            "REDISCLI_AUTH",
+            TEST_CONTAINER,
+            "redis-cli",
+            "INFO",
+            "stats",
+        ])
+        .env("REDISCLI_AUTH", password)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("total_connections_received:"))
+        .and_then(|v| v.parse().ok())
+}
+
+async fn observe() -> Option<u64> {
+    tokio::task::spawn_blocking(observe_total_connections)
+        .await
+        .unwrap()
+}
+
+/// 等容器能响应,返回第一次观察到的计数。
+async fn wait_observable(secs: u64) -> u64 {
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    loop {
+        if let Some(n) = observe().await {
+            return n;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "test container did not come back"
+        );
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+/// 观察 `window` 内服务端有没有新连接进来(重连中的残留客户端会让计数增长)。
+///
+/// 容器刚恢复时,Docker 的端口代理会把失联期间客户端排在它那里的连接一次性转给 Redis
+/// (对照实验:没有任何客户端时计数只涨观察者自己的 1;关闭后的客户端状态一直是 Disconnecting),
+/// 所以先等这一阵过去再开始计数。真有残留客户端在重连的话,退避上限是 10 秒,
+/// 在窗口(≥5 秒,失联场景 12 秒)内一定会再冒出来。
+async fn assert_no_new_connections(window: Duration) {
+    wait_observable(60).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let before = observe().await.expect("observe");
+    tokio::time::sleep(window).await;
+    let after = observe().await.expect("observe");
+    assert_eq!(
+        after,
+        before + 1,
+        "{} extra connection(s) arrived within {window:?}: a client is still reconnecting in the background",
+        after - before - 1
+    );
+}
+
+/// 关掉的客户端不能处在连接中或已连接状态(状态是直接证据,计数只是旁证)。
+fn assert_clients_stopped(clients: &[Client]) {
+    use fred::types::ClientState;
+    for c in clients {
+        assert!(
+            matches!(
+                c.state(),
+                ClientState::Disconnecting | ClientState::Disconnected
+            ),
+            "client still {:?} after close",
+            c.state()
+        );
+    }
+}
+
+async fn restore_and_wait() {
+    docker(&["unpause", TEST_CONTAINER]);
+    docker(&["start", TEST_CONTAINER]);
+    wait_observable(60).await;
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Outage {
+    /// `docker pause`:连接还在,但对端不响应(半开)。
+    Paused,
+    /// `docker stop`:连接被断开,连不上。
+    Stopped,
+}
+
+impl Outage {
+    fn start(self) {
+        let ok = match self {
+            Outage::Paused => docker(&["pause", TEST_CONTAINER]),
+            Outage::Stopped => docker(&["stop", TEST_CONTAINER]),
+        };
+        assert!(ok, "could not simulate outage {self:?}");
+    }
+    /// 失联后观察残留重连要看得更久:退避上限是 10 秒。
+    fn window(self) -> Duration {
+        match self {
+            Outage::Paused => Duration::from_secs(5),
+            Outage::Stopped => Duration::from_secs(12),
+        }
+    }
+}
+
+async fn close_when_server_is_gone(outage: Outage) {
+    let _g = CONTAINER_LOCK.write().await;
+    let _restore = RestoreContainer;
+    with_timeout(180, async {
+        let env = TestEnv::new();
+        let pool = env.manager.pool(env.id).await.unwrap();
+        assert_eq!(ping(&pool).await.unwrap(), "PONG");
+        outage.start();
+
+        let started = Instant::now();
+        let _ = env.manager.close(env.id).await;
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "close took {:?} with the server {outage:?}",
+            started.elapsed()
+        );
+        assert_eq!(env.manager.cached(env.id), (false, false, false));
+
+        restore_and_wait().await;
+        assert_no_new_connections(outage.window()).await;
+        assert_clients_stopped(pool.clients());
+    })
+    .await;
+}
+
+async fn select_db_when_server_is_gone(outage: Outage) {
+    let _g = CONTAINER_LOCK.write().await;
+    let _restore = RestoreContainer;
+    with_timeout(180, async {
+        let env = TestEnv::new();
+        let pool = env.manager.pool(env.id).await.unwrap();
+        let console = env.manager.console_client(env.id).await.unwrap();
+        outage.start();
+
+        let started = Instant::now();
+        let result = env.manager.select_db(env.id, 2).await;
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "select_db took {:?} with the server {outage:?}",
+            started.elapsed()
+        );
+        // 配置要写上,缓存要清掉,不管关客户端有没有出错
+        let _ = result;
+        assert_eq!(env.store.connection(env.id).unwrap().selected_db, 2);
+        assert_eq!(env.manager.cached(env.id), (false, false, false));
+
+        restore_and_wait().await;
+        assert_no_new_connections(outage.window()).await;
+        assert_clients_stopped(pool.clients());
+        assert_clients_stopped(std::slice::from_ref(&console));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs redis"]
+async fn r03a_close_returns_quickly_and_leaves_nothing_when_server_paused() {
+    close_when_server_is_gone(Outage::Paused).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs redis"]
+async fn r03a_close_returns_quickly_and_leaves_nothing_when_server_stopped() {
+    close_when_server_is_gone(Outage::Stopped).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs redis"]
+async fn r03a_select_db_returns_quickly_and_leaves_nothing_when_server_paused() {
+    select_db_when_server_is_gone(Outage::Paused).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs redis"]
+async fn r03a_select_db_returns_quickly_and_leaves_nothing_when_server_stopped() {
+    select_db_when_server_is_gone(Outage::Stopped).await;
+}
+
+/// 基线:服务器正常时关闭后也不留下重连的客户端。
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs redis"]
+async fn r03a_normal_close_leaves_no_reconnecting_client() {
+    let _g = CONTAINER_LOCK.write().await;
+    with_timeout(60, async {
+        let env = TestEnv::new();
+        env.manager.pool(env.id).await.unwrap();
+        env.manager.console_client(env.id).await.unwrap();
+        env.manager.subscriber_client(env.id, |_| {}).await.unwrap();
+        env.manager.close(env.id).await.unwrap();
+        assert_no_new_connections(Duration::from_secs(5)).await;
+    })
+    .await;
+}
+
+/// 建连失败(密码错误、不存在的 ACL 用户)后,fred 不能在后台一直重连;错误类型是 Auth。
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs redis"]
+async fn r03a_failed_init_returns_auth_and_leaves_no_reconnecting_client() {
+    let _g = CONTAINER_LOCK.write().await;
+    with_timeout(120, async {
+        let cases = [
+            TestEnv::with_creds(None, Some("definitely-wrong-password")),
+            // 不存在的 ACL 用户也是 Auth
+            TestEnv::with_creds(Some("xredis_test_no_such_user"), Some("whatever")),
+        ];
+        for env in &cases {
+            let err = env.manager.pool(env.id).await.expect_err("should fail");
+            assert!(matches!(err, Error::Auth(_)), "{err:?}");
+            assert_eq!(env.manager.cached(env.id), (false, false, false));
+        }
+        assert_no_new_connections(Duration::from_secs(6)).await;
+    })
+    .await;
+}
+
+// ---------------------------------------------------------------------------
+// R-03a:TLS 实连(`xredis-test-redis-tls`,127.0.0.1:6392,要求客户端证书)
+// ---------------------------------------------------------------------------
+
+async fn tls_connects_with_key(key_file: &str) {
+    let _g = CONTAINER_LOCK.read().await;
+    with_timeout(60, async {
+        let fx = TlsFixture::from_env();
+        let env = fx.env(fx.full_tls(key_file));
+        let pool = env.manager.pool(env.id).await.expect("TLS connect");
+        assert_eq!(ping(&pool).await.unwrap(), "PONG");
+        env.manager.close(env.id).await.unwrap();
+    })
+    .await;
+}
+
+/// L-12:CA 加客户端证书,PKCS#8 私钥("PRIVATE KEY")。
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs redis"]
+async fn l12_tls_connects_with_pkcs8_client_key() {
+    tls_connects_with_key("client.pkcs8.key").await;
+}
+
+/// L-12:同一把私钥的 PKCS#1 编码("RSA PRIVATE KEY")。
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs redis"]
+async fn l12_tls_connects_with_pkcs1_client_key() {
+    tls_connects_with_key("client.pkcs1.key").await;
+}
+
+/// 不填 CA 时只信系统根证书,自签证书要很快失败并返回连接类(TLS)错误,不能挂住。
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs redis"]
+async fn l12_tls_without_ca_rejects_self_signed_server_quickly() {
+    let _g = CONTAINER_LOCK.read().await;
+    with_timeout(60, async {
+        let fx = TlsFixture::from_env();
+        let mut tls = fx.full_tls("client.pkcs8.key");
+        tls.ca_cert = None;
+        let env = fx.env(tls);
+        let started = Instant::now();
+        let err = env
+            .manager
+            .pool(env.id)
+            .await
+            .expect_err("self-signed must be rejected");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "took {:?}: {err:?}",
+            started.elapsed()
+        );
+        assert!(matches!(err, Error::Connect(_)), "{err:?}");
+        assert_eq!(env.manager.cached(env.id), (false, false, false));
+    })
+    .await;
+}
+
+/// 服务端要求客户端证书,不给就会被拒,同样要很快失败。
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs redis"]
+async fn tls_without_client_cert_is_rejected_quickly() {
+    let _g = CONTAINER_LOCK.read().await;
+    with_timeout(60, async {
+        let fx = TlsFixture::from_env();
+        let tls = TlsConfig {
+            ca_cert: Some(fx.file("ca.crt")),
+            ..TlsConfig::default()
+        };
+        let env = fx.env(tls);
+        let started = Instant::now();
+        let err = env
+            .manager
+            .pool(env.id)
+            .await
+            .expect_err("client cert is required");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "took {:?}: {err:?}",
+            started.elapsed()
+        );
+        // 服务端握手阶段把我们拒了:连接类错误,不是配置、关闭或超时
+        assert!(matches!(err, Error::Connect(_)), "{err:?}");
     })
     .await;
 }

@@ -22,7 +22,9 @@ use fred::types::config::{
     Config as FredConfig, ConnectionConfig as FredConnectionConfig, PerformanceConfig,
     ReconnectPolicy, TlsConfig as FredTlsConfig, TlsHostMapping, UnresponsiveConfig,
 };
+use futures_util::future::join_all;
 use tokio::sync::{MutexGuard, watch};
+use tokio::task::AbortHandle;
 
 use super::info::{ConnectionInfo, db_count_or_default, parse_keyspace};
 use super::{tls, uri};
@@ -30,15 +32,22 @@ use crate::config::{ConfigStore, ConnId, ConnectionConfig};
 use crate::consts::*;
 use crate::error::{Error, Result};
 
+/// 一个建好的客户端和驱动它的路由任务。服务器失联时 `quit` 可能一直等不到回应,而重连策略是
+/// 不限次数的,所以关闭时除了 `quit`,还要把路由任务 `abort` 掉,否则服务器一恢复它们又连回来。
+struct Managed<T> {
+    client: T,
+    tasks: Vec<AbortHandle>,
+}
+
 /// 一个连接的生命周期状态。
 struct ConnSlot {
     /// 串行化「建客户端」「切库」「关闭」。
     lock: tokio::sync::Mutex<()>,
     /// 关闭纪元,每次 `close` 加一。
     closed: watch::Sender<u64>,
-    pool: Mutex<Option<Pool>>,
-    subscriber: Mutex<Option<Client>>,
-    console: Mutex<Option<Client>>,
+    pool: Mutex<Option<Managed<Pool>>>,
+    subscriber: Mutex<Option<Managed<Client>>>,
+    console: Mutex<Option<Managed<Client>>>,
 }
 
 pub struct ConnManager {
@@ -49,17 +58,25 @@ pub struct ConnManager {
 /// 池和单个客户端的统一构造。
 trait Built: ClientLike + Clone + Send + Sync + 'static {
     fn build(builder: Builder) -> Result<Self>;
+    /// 里面实际的客户端(池是 12 个,单客户端就是自己)。
+    fn clients(&self) -> Vec<Client>;
 }
 
 impl Built for Pool {
     fn build(builder: Builder) -> Result<Self> {
         Ok(builder.build_pool(POOL_SIZE)?)
     }
+    fn clients(&self) -> Vec<Client> {
+        Pool::clients(self).to_vec()
+    }
 }
 
 impl Built for Client {
     fn build(builder: Builder) -> Result<Self> {
         Ok(builder.build()?)
+    }
+    fn clients(&self) -> Vec<Client> {
+        vec![self.clone()]
     }
 }
 
@@ -113,29 +130,74 @@ async fn lock_unless_closed<'a>(
     }
 }
 
-/// 初始化 `client` 并等它连上;期间连接被关闭则立刻放弃。
+/// 逐个初始化客户端并等它们连上,返回路由任务的句柄。任何一个失败就把已经成功的任务也停掉
+/// (失败的那个 fred 自己会收掉路由任务)。
+async fn init_all(clients: Vec<Client>) -> Result<Vec<AbortHandle>> {
+    let results = join_all(clients.iter().map(|c| c.init())).await;
+    let mut tasks = Vec::new();
+    let mut first_err = None;
+    for r in results {
+        match r {
+            Ok(handle) => tasks.push(handle.abort_handle()),
+            Err(e) => {
+                first_err.get_or_insert(e);
+            }
+        }
+    }
+    match first_err {
+        Some(e) => {
+            for t in &tasks {
+                t.abort();
+            }
+            Err(e.into())
+        }
+        None => Ok(tasks),
+    }
+}
+
+/// 初始化 `built` 并等它连上;期间连接被关闭则立刻放弃。
 ///
 /// fred 的 `init` 一旦开始就叫不停:丢弃 future 不会停掉它 spawn 出去的路由任务。
-/// 所以放弃时把 init 交给后台跑完 —— 失败的话 fred 自己会收掉路由任务,
-/// 成功的话立刻 `quit()`,不留下一条没人要的连接。
-async fn init_unless_closed<C: Built>(client: C, closed: &mut watch::Receiver<u64>) -> Result<C> {
-    let mut init = tokio::spawn({
-        let client = client.clone();
-        async move { client.init().await }
-    });
+/// 所以放弃时把 init 交给后台跑完,跑完(不管成败)就把路由任务停掉,不留下没人要的连接。
+async fn init_unless_closed<C: Built>(
+    built: &C,
+    closed: &mut watch::Receiver<u64>,
+) -> Result<Vec<AbortHandle>> {
+    let clients = built.clients();
+    let mut init = tokio::spawn(init_all(clients));
     tokio::select! {
         biased;
         _ = closed.changed() => {
             tokio::spawn(async move {
-                if let Ok(Ok(_)) = init.await {
-                    let _ = client.quit().await;
+                if let Ok(Ok(tasks)) = init.await {
+                    for t in &tasks {
+                        t.abort();
+                    }
                 }
             });
             Err(Error::Closed)
         }
-        r = &mut init => {
-            r.map_err(|e| Error::Redis(e.to_string()))??;
-            Ok(client)
+        r = &mut init => r.map_err(|e| Error::Redis(e.to_string()))?,
+    }
+}
+
+/// 限时 `quit`,然后无论成败都停掉路由任务。`quit` 在服务器失联时要等满命令超时
+/// (15 秒)才返回,不能让关闭和切库一直持锁等着。
+async fn quit_and_abort<T: Built>(managed: Option<Managed<T>>) -> Result<()> {
+    let Some(m) = managed else {
+        return Ok(());
+    };
+    let quit = tokio::time::timeout(Duration::from_millis(QUIT_TIMEOUT_MS), m.client.quit()).await;
+    for t in &m.tasks {
+        t.abort();
+    }
+    match quit {
+        Ok(result) => result.map_err(Error::from),
+        Err(_) => {
+            tracing::warn!(
+                "quit 超过 {QUIT_TIMEOUT_MS}ms 没有返回(服务器可能失联),已强制停掉连接任务"
+            );
+            Ok(())
         }
     }
 }
@@ -174,12 +236,16 @@ impl ConnManager {
     async fn ensure<T: Built>(
         &self,
         id: ConnId,
-        pick: fn(&ConnSlot) -> &Mutex<Option<T>>,
+        pick: fn(&ConnSlot) -> &Mutex<Option<Managed<T>>>,
         on_created: impl FnOnce(&T),
     ) -> Result<T> {
         let slot = self.slot(id);
         // 快路径:已有缓存直接返回,不必加锁
-        let cached = pick(&slot).lock().unwrap().clone();
+        let cached = pick(&slot)
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|m| m.client.clone());
         if let Some(c) = cached {
             return Ok(c);
         }
@@ -187,7 +253,11 @@ impl ConnManager {
         let mut closed = slot.closed.subscribe();
         let _guard = lock_unless_closed(&slot, &mut closed).await?;
         // 等锁期间可能已被其他任务建好,二次检查避免重复建立(L-04)
-        let cached = pick(&slot).lock().unwrap().clone();
+        let cached = pick(&slot)
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|m| m.client.clone());
         if let Some(c) = cached {
             return Ok(c);
         }
@@ -195,10 +265,13 @@ impl ConnManager {
         let cfg = self.store.connection(id)?;
         let password = self.store.password(id)?;
         let built = T::build(build_builder(&cfg, password.as_deref())?)?;
-        let client = init_unless_closed(built, &mut closed).await?;
-        on_created(&client);
-        *pick(&slot).lock().unwrap() = Some(client.clone());
-        Ok(client)
+        let tasks = init_unless_closed(&built, &mut closed).await?;
+        on_created(&built);
+        *pick(&slot).lock().unwrap() = Some(Managed {
+            client: built.clone(),
+            tasks,
+        });
+        Ok(built)
     }
 
     /// 普通命令用的连接池。
@@ -243,11 +316,8 @@ impl ConnManager {
     pub async fn close_subscriber(&self, id: ConnId) -> Result<()> {
         let slot = self.slot(id);
         let _guard = slot.lock.lock().await;
-        let client = slot.subscriber.lock().unwrap().take();
-        match client {
-            Some(c) => c.quit().await.map_err(Error::from),
-            None => Ok(()),
-        }
+        let managed = slot.subscriber.lock().unwrap().take();
+        quit_and_abort(managed).await
     }
 
     /// 切库:持锁,**先写配置,再清缓存**(L-03)。这样即使本函数返回后立刻有请求建池,
@@ -282,28 +352,17 @@ impl ConnManager {
     }
 }
 
-/// 关闭槽里所有客户端(调用方已持锁)。每个都尝试关,返回第一个错误。
+/// 关闭槽里所有客户端(调用方已持锁)。三种并发地关,每个都限时,返回第一个错误。
 async fn close_all(slot: &ConnSlot) -> Result<()> {
     let pool = slot.pool.lock().unwrap().take();
     let subscriber = slot.subscriber.lock().unwrap().take();
     let console = slot.console.lock().unwrap().take();
-    let mut first_err: Option<Error> = None;
-    let pool_result = match pool {
-        Some(p) => p.quit().await,
-        None => Ok(()),
-    };
-    if let Err(e) = pool_result {
-        first_err.get_or_insert(e.into());
-    }
-    for c in [subscriber, console].into_iter().flatten() {
-        if let Err(e) = c.quit().await {
-            first_err.get_or_insert(e.into());
-        }
-    }
-    match first_err {
-        Some(e) => Err(e),
-        None => Ok(()),
-    }
+    let (a, b, c) = tokio::join!(
+        quit_and_abort(pool),
+        quit_and_abort(subscriber),
+        quit_and_abort(console)
+    );
+    a.and(b).and(c)
 }
 
 #[cfg(test)]

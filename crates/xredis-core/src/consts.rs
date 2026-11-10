@@ -36,3 +36,14 @@ pub const CONNECT_TIMEOUT_MS: u64 = 10_000;
 /// 半开连接探测:间隔、超时。
 pub const UNRESPONSIVE_INTERVAL_MS: u64 = 2_000;
 pub const UNRESPONSIVE_TIMEOUT_MS: u64 = 8_000;
+
+/// 批量删除 key 每批的数量(v2 新增)。
+pub const DELETE_BATCH: usize = 500;
+/// String 超过这个长度(字节)就只读前 `LARGE_VALUE_PREVIEW` 字节、只读显示(v2 新增)。
+pub const LARGE_VALUE_THRESHOLD: u64 = 8 * 1024 * 1024;
+pub const LARGE_VALUE_PREVIEW: u64 = 1024 * 1024;
+/// TTL、List 下标输入的上限。
+pub const TTL_MAX: i64 = 2_147_483_647;
+
+/// 关闭连接时等 `quit` 的上限。服务器失联时 `quit` 要等满命令超时,超过这个时间就强制停掉连接任务。
+pub const QUIT_TIMEOUT_MS: u64 = 1_500;

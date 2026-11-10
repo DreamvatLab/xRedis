@@ -27,6 +27,8 @@ urlencoding = "2"
 fred = { version = "10", features = ["enable-rustls"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
 pem = "4"
+bytes = "1"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 rustls-native-certs = "0.8"
 tempfile = "3"
 

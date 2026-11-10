@@ -12,7 +12,7 @@ use tokio::sync::RwLock;
 use ulid::Ulid;
 
 use super::ConnManager;
-use crate::config::{ConfigStore, ConnId, ConnectionDraft, PasswordChange};
+use crate::config::{ConfigStore, ConnId, ConnectionDraft, PasswordChange, TlsConfig};
 use crate::keystore::MemoryStore;
 
 /// 测试容器名。
@@ -102,6 +102,17 @@ impl TestEnv {
         username: Option<&str>,
         password: Option<&str>,
     ) -> Self {
+        Self::with_tls(host, port, username, password, None)
+    }
+
+    /// 带 TLS 配置。
+    pub(crate) fn with_tls(
+        host: &str,
+        port: u16,
+        username: Option<&str>,
+        password: Option<&str>,
+        tls: Option<TlsConfig>,
+    ) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let (store, _) = ConfigStore::open(dir.path(), Arc::new(MemoryStore::new())).unwrap();
         let store = Arc::new(store);
@@ -113,7 +124,7 @@ impl TestEnv {
                 port,
                 ordinal: 0,
                 username: username.map(str::to_string),
-                tls: None,
+                tls,
                 password: match password {
                     Some(p) => PasswordChange::Set(p.into()),
                     None => PasswordChange::Keep,
@@ -127,5 +138,51 @@ impl TestEnv {
             id,
             _dir: dir,
         }
+    }
+}
+
+/// TLS 测试容器(`scripts/test-redis.sh` 起的 `xredis-test-redis-tls`)的证书目录和端口。
+pub(crate) struct TlsFixture {
+    pub dir: std::path::PathBuf,
+    pub port: u16,
+}
+
+impl TlsFixture {
+    pub(crate) fn from_env() -> Self {
+        let dir = std::env::var("XREDIS_TEST_TLS_DIR").expect(
+            "XREDIS_TEST_TLS_DIR is not set; run these tests with scripts/test-redis.sh test",
+        );
+        let port = std::env::var("XREDIS_TEST_REDIS_TLS_PORT")
+            .unwrap_or_else(|_| "6392".into())
+            .parse()
+            .unwrap();
+        Self {
+            dir: dir.into(),
+            port,
+        }
+    }
+
+    pub(crate) fn file(&self, name: &str) -> std::path::PathBuf {
+        self.dir.join(name)
+    }
+
+    /// CA 加客户端证书,私钥文件名由调用方选(PKCS#8 或 PKCS#1)。
+    pub(crate) fn full_tls(&self, client_key: &str) -> TlsConfig {
+        TlsConfig {
+            ca_cert: Some(self.file("ca.crt")),
+            client_cert: Some(self.file("client.crt")),
+            client_key: Some(self.file(client_key)),
+        }
+    }
+
+    pub(crate) fn env(&self, tls: TlsConfig) -> TestEnv {
+        let creds = test_redis_creds();
+        TestEnv::with_tls(
+            "127.0.0.1",
+            self.port,
+            None,
+            creds.password.as_deref(),
+            Some(tls),
+        )
     }
 }

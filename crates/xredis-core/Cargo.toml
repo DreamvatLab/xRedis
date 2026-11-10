@@ -18,6 +18,8 @@ urlencoding.workspace = true
 fred.workspace = true
 tokio.workspace = true
 pem.workspace = true
+bytes.workspace = true
+futures-util.workspace = true
 rustls-native-certs.workspace = true
 
 [dev-dependencies]

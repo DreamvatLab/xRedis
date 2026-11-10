@@ -11,7 +11,7 @@ use xredis_core::keystore::{KeyStore, MemoryStore};
 use super::*;
 use crate::app::{AGREEMENT_VERSION, App, TabStatus};
 use crate::backend::CoreBackend;
-use crate::msg::{Cmd, KeysMsg, Msg, PlatformCmd};
+use crate::msg::{Cmd, KeysMsg, Msg, PlatformCmd, StartupWarning};
 use crate::testing::FakeBackend;
 
 // ---------------------------------------------------------------------------
@@ -457,16 +457,17 @@ async fn p66_an_unusable_config_dir_falls_back_to_a_temporary_one_with_a_warning
     assert_ne!(backend.config_dir(), occupied.as_path());
     let data = backend.startup().await;
     assert!(
-        data.warnings
-            .iter()
-            .any(|w| w.contains("not usable") && w.contains("temporary")),
+        data.warnings.iter().any(|w| matches!(
+            w,
+            StartupWarning::ConfigDirUnusable { fallback, .. } if fallback == backend.config_dir()
+        )),
         "{:?}",
         data.warnings
     );
     assert_eq!(data.settings, Default::default());
 
     let saved = backend.save_connection(draft("works")).await.unwrap();
-    assert!(saved.outcome.warnings.is_empty());
+    assert!(saved.outcome.password_error.is_none());
     assert_eq!(backend.connections().await.len(), 1);
     assert_eq!(
         std::fs::read(&occupied).unwrap(),
@@ -485,9 +486,13 @@ async fn p66_a_corrupt_config_file_is_kept_aside_and_reported() {
         CoreBackend::open(tmp.path().to_path_buf(), Arc::new(MemoryStore::new()), None).unwrap();
     let data = backend.startup().await;
     assert!(
-        data.warnings
-            .iter()
-            .any(|w| w.contains("config.json.broken")),
+        data.warnings.iter().any(|w| matches!(
+            w,
+            StartupWarning::Config(xredis_core::config::ConfigWarning::CorruptConfig {
+                backup: Some(b),
+                ..
+            }) if b.ends_with("config.json.broken")
+        )),
         "{:?}",
         data.warnings
     );
@@ -579,11 +584,6 @@ async fn first_start_imports_from_v1_once_and_never_writes_the_v1_file() {
     let data = backend.startup().await;
     assert!(data.import.as_ref().unwrap().error.is_some());
     assert!(data.connections.is_empty());
-    assert!(
-        data.warnings.iter().any(|w| w.contains("v1")),
-        "{:?}",
-        data.warnings
-    );
 }
 
 /// 启动时加载用户语言包,结果带给界面。

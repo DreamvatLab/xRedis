@@ -121,14 +121,46 @@ pub struct ConnectionDraft {
     pub password: PasswordChange,
 }
 
-/// [`ConfigStore::save_connection`] 的结果:连接已保存,`warnings` 是要显示给用户的提示(比如密码没存上)。
+/// [`ConfigStore::save_connection`] 的结果:连接已保存;密码没存上时 `password_error` 是密钥存储的
+/// 原始报错,界面按它翻译提示(core 不拼给用户看的句子)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SaveOutcome {
     pub id: ConnId,
-    /// 英文提示,给日志用。
-    pub warnings: Vec<String>,
-    /// 密码没存上时密钥存储的原始报错(界面按它翻译提示,不用上面的英文句子)。
     pub password_error: Option<String>,
+}
+
+/// 打开配置时遇到的、不影响继续运行的问题。界面按种类翻译;`Display` 的英文只给日志用。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigWarning {
+    /// 配置文件解析失败,用默认配置继续。`backup` 是改名留存后的路径,`None` 表示改名也失败了。
+    CorruptConfig {
+        path: PathBuf,
+        reason: String,
+        backup: Option<PathBuf>,
+    },
+}
+
+impl fmt::Display for ConfigWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConfigWarning::CorruptConfig {
+                path,
+                reason,
+                backup,
+            } => {
+                write!(
+                    f,
+                    "Config file {} could not be parsed ({reason}); ",
+                    path.display()
+                )?;
+                match backup {
+                    Some(b) => write!(f, "it was saved as {}", b.display())?,
+                    None => write!(f, "backing it up failed")?,
+                }
+                write!(f, ". Continuing with default settings.")
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -184,7 +216,7 @@ pub struct ConfigStore {
 impl ConfigStore {
     /// 打开(必要时创建目录)。返回的警告字符串要显示给用户,比如坏文件已改名留存。
     /// 目录建不出来(比如路径被文件占用)返回 `Err`,调用方自己决定怎么继续。
-    pub fn open(dir: &Path, secrets: Arc<dyn KeyStore>) -> Result<(Self, Vec<String>)> {
+    pub fn open(dir: &Path, secrets: Arc<dyn KeyStore>) -> Result<(Self, Vec<ConfigWarning>)> {
         fs::create_dir_all(dir).map_err(|source| Error::Io {
             action: "create config directory",
             path: dir.to_path_buf(),
@@ -196,14 +228,11 @@ impl ConfigStore {
             Ok(bytes) => match serde_json::from_slice::<ConfigFile>(&bytes) {
                 Ok(config) => (config, false),
                 Err(err) => {
-                    let detail = match backup_broken_file(&path) {
-                        Some(to) => format!("it was saved as {}", to.display()),
-                        None => "backing it up failed".to_string(),
-                    };
-                    warnings.push(format!(
-                        "Config file {} could not be parsed ({err}); {detail}. Continuing with default settings.",
-                        path.display()
-                    ));
+                    warnings.push(ConfigWarning::CorruptConfig {
+                        reason: err.to_string(),
+                        backup: backup_broken_file(&path),
+                        path: path.clone(),
+                    });
                     (ConfigFile::default(), false)
                 }
             },
@@ -381,20 +410,12 @@ impl ConfigStore {
             PasswordChange::Set(p) => self.secrets.set(&account, p),
         };
         // 连接已经落盘,密码没存上不能当成保存失败(界面会重试造成重复连接),作为警告带回
-        let mut warnings = Vec::new();
         let mut password_error = None;
         if let Err(err) = password_result {
             password_error = Some(err.to_string());
             tracing::warn!("连接 {id} 已保存,但密码写入密钥存储失败: {err}");
-            warnings.push(format!(
-                "The connection was saved, but its password could not be stored: {err}"
-            ));
         }
-        Ok(SaveOutcome {
-            id,
-            warnings,
-            password_error,
-        })
+        Ok(SaveOutcome { id, password_error })
     }
 
     /// 切库时先写配置(L-03:先写配置再清连接缓存)。
@@ -544,7 +565,19 @@ mod tests {
         let (store, warnings) =
             ConfigStore::open(tmp.path(), Arc::new(MemoryStore::new())).unwrap();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
-        assert!(warnings[0].contains(".broken"));
+        match &warnings[0] {
+            ConfigWarning::CorruptConfig {
+                path,
+                backup: Some(b),
+                ..
+            } => {
+                assert!(path.ends_with("config.json"));
+                assert!(b.ends_with("config.json.broken"));
+            }
+            other => panic!("{other:?}"),
+        }
+        let log_text = warnings[0].to_string();
+        assert!(log_text.contains(".broken"), "{log_text}");
         assert_eq!(
             fs::read(tmp.path().join("config.json.broken")).unwrap(),
             b"{ not json"
@@ -711,8 +744,6 @@ mod tests {
         let mut d = draft("a");
         d.password = PasswordChange::Set("pw".into());
         let out = store.save_connection(d).unwrap();
-        assert_eq!(out.warnings.len(), 1, "{:?}", out.warnings);
-        assert!(out.warnings[0].contains("locked"));
         assert!(out.password_error.as_deref().unwrap().contains("locked"));
         // 连接确实已保存,且只有一条
         assert_eq!(store.connections().len(), 1);
@@ -722,11 +753,10 @@ mod tests {
         d2.id = Some(out.id);
         d2.password = PasswordChange::Clear;
         let out2 = store.save_connection(d2).unwrap();
-        assert_eq!(out2.warnings.len(), 1);
+        assert!(out2.password_error.is_some());
         assert_eq!(store.connections().len(), 1);
         // 没碰密码时没有警告
         let ok = store.save_connection(draft("b")).unwrap();
-        assert!(ok.warnings.is_empty());
         assert!(ok.password_error.is_none());
     }
 

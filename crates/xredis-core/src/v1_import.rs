@@ -23,7 +23,42 @@ pub fn v1_config_path() -> Option<PathBuf> {
 pub struct ImportReport {
     pub connections: usize,
     /// 要显示给用户的提示:解密失败跳过的密码、跳过的坏记录。
-    pub warnings: Vec<String>,
+    pub warnings: Vec<ImportWarning>,
+}
+
+/// 导入时的一条提示。`label` 是连接在界面上的名字(名字,没有就用 host)。界面按种类翻译,
+/// `Display` 的英文只给日志用。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportWarning {
+    /// 连接的 id 不合法,整条跳过。
+    InvalidId { label: String },
+    /// 端口不合法,整条跳过。
+    InvalidPort { label: String, port: u32 },
+    /// 密码用 v1 的密钥解不开,连接导入了但没有密码,要用户重新输入。
+    PasswordUndecryptable { label: String },
+    /// 密码解开了但存进密钥存储失败。
+    PasswordNotStored { label: String, reason: String },
+}
+
+impl std::fmt::Display for ImportWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ImportWarning::InvalidId { label } => {
+                write!(f, "Skipped connection {label}: invalid id")
+            }
+            ImportWarning::InvalidPort { label, port } => {
+                write!(f, "Skipped connection {label}: invalid port {port}")
+            }
+            ImportWarning::PasswordUndecryptable { label } => write!(
+                f,
+                "Password of connection {label} could not be decrypted and was skipped"
+            ),
+            ImportWarning::PasswordNotStored { label, reason } => write!(
+                f,
+                "Password of connection {label} could not be saved to the key store: {reason}"
+            ),
+        }
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -113,7 +148,7 @@ pub fn import_v1_if_first_run(store: &ConfigStore, v1_path: &Path) -> Result<Opt
 
     let mut report = ImportReport::default();
     let mut connections = Vec::new();
-    let mut passwords: Vec<(ConnId, String)> = Vec::new();
+    let mut passwords: Vec<(ConnId, String, String)> = Vec::new();
     for c in v1.connections {
         let label = c
             .name
@@ -123,29 +158,27 @@ pub fn import_v1_if_first_run(store: &ConfigStore, v1_path: &Path) -> Result<Opt
         let id: ConnId = match c.id.parse() {
             Ok(id) => id,
             Err(_) => {
-                report
-                    .warnings
-                    .push(format!("Skipped connection {label}: invalid id"));
+                report.warnings.push(ImportWarning::InvalidId { label });
                 continue;
             }
         };
         let port = match u16::try_from(c.port) {
             Ok(p) if p != 0 => p,
             _ => {
-                report.warnings.push(format!(
-                    "Skipped connection {label}: invalid port {}",
-                    c.port
-                ));
+                report.warnings.push(ImportWarning::InvalidPort {
+                    label,
+                    port: c.port,
+                });
                 continue;
             }
         };
         if let Some(enc) = c.password.as_deref().filter(|p| !p.is_empty()) {
             match v1_decrypt(enc) {
-                Some(plain) if !plain.is_empty() => passwords.push((id, plain)),
+                Some(plain) if !plain.is_empty() => passwords.push((id, label.clone(), plain)),
                 Some(_) => {}
-                None => report
-                    .warnings
-                    .push(format!("Password of connection {label} could not be decrypted and was skipped; please enter it again")),
+                None => report.warnings.push(ImportWarning::PasswordUndecryptable {
+                    label: label.clone(),
+                }),
             }
         }
         let tls = (c.tls == Some(true)).then(|| TlsConfig {
@@ -183,11 +216,12 @@ pub fn import_v1_if_first_run(store: &ConfigStore, v1_path: &Path) -> Result<Opt
         Ok(())
     })?;
 
-    for (id, plain) in passwords {
+    for (id, label, plain) in passwords {
         if let Err(err) = store.secrets().set(&id.to_string(), &plain) {
-            report.warnings.push(format!(
-                "Password of connection {id} could not be saved to the key store: {err}"
-            ));
+            report.warnings.push(ImportWarning::PasswordNotStored {
+                label,
+                reason: err.to_string(),
+            });
         }
     }
     Ok(Some(report))
@@ -298,7 +332,13 @@ mod tests {
         let report = import_v1_if_first_run(&store, &v1).unwrap().unwrap();
         assert_eq!(report.connections, 1);
         assert_eq!(report.warnings.len(), 1);
-        assert!(report.warnings[0].contains("bad"));
+        assert_eq!(
+            report.warnings[0],
+            ImportWarning::PasswordUndecryptable {
+                label: "bad".into()
+            }
+        );
+        assert!(report.warnings[0].to_string().contains("bad"));
         assert_eq!(secrets.get(&id.to_string()).unwrap(), None);
     }
 
@@ -379,6 +419,11 @@ mod tests {
         let report = import_v1_if_first_run(&store, &v1).unwrap().unwrap();
         assert_eq!(report.connections, 1);
         assert_eq!(report.warnings.len(), 2);
+        assert!(matches!(&report.warnings[0], ImportWarning::InvalidId { label } if label == "a"));
+        assert!(matches!(
+            &report.warnings[1],
+            ImportWarning::InvalidPort { label, port: 70000 } if label == "b"
+        ));
         assert_eq!(store.connections()[0].id, good);
     }
 }

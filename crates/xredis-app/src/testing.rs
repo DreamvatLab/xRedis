@@ -17,7 +17,7 @@ use xredis_core::transfer::{ClipboardEntry, CopyOutcome, PasteOutcome};
 use xredis_core::{Error, Result};
 
 use crate::backend::Backend;
-use crate::msg::{Saved, StartupData};
+use crate::msg::{Saved, StartupData, StartupWarning};
 
 #[derive(Default)]
 struct Control {
@@ -26,7 +26,7 @@ struct Control {
     hung: HashSet<&'static str>,
     delay: Duration,
     keystore_degraded: bool,
-    startup_warnings: Vec<String>,
+    startup_warnings: Vec<StartupWarning>,
     /// `connect` 返回的每个库的 key 数(下标是库号)。
     key_counts: Vec<i64>,
     /// 内存里的 keyspace(按名字排序),`scan_keys` 按它分页。
@@ -105,7 +105,7 @@ impl FakeBackend {
         self.ctl.lock().unwrap().keystore_degraded = v;
     }
 
-    pub fn set_startup_warnings(&self, w: Vec<String>) {
+    pub fn set_startup_warnings(&self, w: Vec<StartupWarning>) {
         self.ctl.lock().unwrap().startup_warnings = w;
     }
 

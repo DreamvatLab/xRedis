@@ -5,6 +5,11 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# 假 Backend(`testing` 模块)。它用临时目录,所以 `tempfile` 只在这个特性和 dev-dependencies 里出现,
+# 不进发布版。GUI 层的测试在自己的 dev-dependencies 里打开这个特性。
+test-support = ["dep:tempfile"]
+
 [dependencies]
 xredis-core.workspace = true
 tokio.workspace = true
@@ -14,7 +19,7 @@ rust-i18n.workspace = true
 bytes.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
-# 假 Backend(testing 模块)要用临时目录;GUI 层的测试也会用它
-tempfile.workspace = true
+tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
+tempfile.workspace = true

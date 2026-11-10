@@ -12,10 +12,14 @@ pub mod keylist;
 pub mod messages;
 pub mod msg;
 pub mod runtime;
+// 假 Backend:只给测试用(本 crate 自己的测试,或别的 crate 在 dev-dependencies 里打开 `test-support`)
+#[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod warning_tests;
 
 pub use app::{App, Tab, TabStatus};
 pub use backend::{Backend, CoreBackend};

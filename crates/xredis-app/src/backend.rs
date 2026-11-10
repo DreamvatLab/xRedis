@@ -17,7 +17,7 @@ use xredis_core::keystore::{FallbackStore, KeyStore, KeyringStore};
 use xredis_core::transfer::{CopyOutcome, PasteOutcome};
 use xredis_core::v1_import::{import_v1_if_first_run, v1_config_path};
 
-use crate::msg::{ImportSummary, Saved, StartupData};
+use crate::msg::{ImportSummary, Saved, StartupData, StartupWarning};
 
 #[async_trait]
 pub trait Backend: Send + Sync + 'static {
@@ -58,7 +58,7 @@ pub struct CoreBackend {
     config_dir: PathBuf,
     v1_path: Option<PathBuf>,
     /// 打开配置时的警告(改用了临时目录、坏文件已备份),在 `startup` 里带给界面。
-    open_warnings: Vec<String>,
+    open_warnings: Vec<StartupWarning>,
 }
 
 impl CoreBackend {
@@ -81,17 +81,17 @@ impl CoreBackend {
         let mut open_warnings = Vec::new();
         let (store, dir) = match ConfigStore::open(&config_dir, keystore.clone()) {
             Ok((store, warnings)) => {
-                open_warnings.extend(warnings);
+                open_warnings.extend(warnings.into_iter().map(StartupWarning::Config));
                 (store, config_dir)
             }
             Err(err) => {
                 let fallback = std::env::temp_dir().join(format!("xRedis-v2-{}", ConnId::new()));
-                open_warnings.push(format!(
-                    "The configuration directory is not usable ({err}). Using a temporary location ({}); your changes will not be kept after the app exits.",
-                    fallback.display()
-                ));
+                open_warnings.push(StartupWarning::ConfigDirUnusable {
+                    reason: err.to_string(),
+                    fallback: fallback.clone(),
+                });
                 let (store, warnings) = ConfigStore::open(&fallback, keystore.clone())?;
-                open_warnings.extend(warnings);
+                open_warnings.extend(warnings.into_iter().map(StartupWarning::Config));
                 (store, fallback)
             }
         };
@@ -133,7 +133,7 @@ impl Backend for CoreBackend {
         let keystore = self.keystore.clone();
         let v1_path = self.v1_path.clone();
         let locales_dir = self.config_dir.join("locales");
-        let mut warnings = self.open_warnings.clone();
+        let warnings = self.open_warnings.clone();
         blocking(move || {
             let packs = crate::i18n::load_user_packs(&locales_dir);
             // 探测一次钥匙串:不可用时 FallbackStore 当场降级,界面就能在启动时提示
@@ -145,14 +145,11 @@ impl Backend for CoreBackend {
                     error: None,
                 }),
                 Ok(None) => None,
-                Err(err) => {
-                    warnings.push(format!("Importing from xRedis v1 failed: {err}"));
-                    Some(ImportSummary {
-                        connections: 0,
-                        warnings: Vec::new(),
-                        error: Some(err.to_string()),
-                    })
-                }
+                Err(err) => Some(ImportSummary {
+                    connections: 0,
+                    warnings: Vec::new(),
+                    error: Some(err.to_string()),
+                }),
             });
             StartupData {
                 settings: store.settings(),

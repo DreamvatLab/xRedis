@@ -159,14 +159,10 @@ msg.password_not_saved:
   en: "The connection was saved, but its password could not be stored: %{reason}"
 msg.keystore_degraded:
   en: "The system key store is not available. Passwords are kept in memory only and will be lost when the app exits."
-msg.config_warning:
-  en: "%{warning}"
 msg.import_done:
   en: "Imported %{count} connection(s) from xRedis v1."
 msg.import_failed:
   en: "Importing from xRedis v1 failed: %{reason}"
-msg.import_warning:
-  en: "%{warning}"
 msg.pack_loaded:
   en: "Language pack %{file} loaded (%{languages})."
 msg.pack_error:
@@ -331,3 +327,21 @@ err.clipboard_write:
   en: "Could not write to the clipboard: %{reason}. It may be held by another app (an input method, a clipboard manager, remote desktop). Try again."
 err.clipboard_read:
   en: "Could not read the clipboard: %{reason}. It may be held by another app (an input method, a clipboard manager, remote desktop). Try again."
+
+# ---- 启动警告和导入提示(core 的警告是结构化的,这里按种类翻译) ----
+warn.config_corrupt_backed_up:
+  en: "The configuration file %{path} could not be read (%{reason}). It was saved as %{backup}. Starting with default settings."
+warn.config_corrupt_not_backed_up:
+  en: "The configuration file %{path} could not be read (%{reason}) and backing it up failed. Starting with default settings."
+warn.config_dir_unusable:
+  en: "The configuration folder is not usable (%{reason}). A temporary folder (%{fallback}) is used instead; your changes will not be kept after the app exits."
+import.invalid_id:
+  en: "Skipped connection %{label}: its id is not valid."
+import.invalid_port:
+  en: "Skipped connection %{label}: invalid port %{port}."
+import.password_undecryptable:
+  en: "The password of connection %{label} could not be decrypted and was skipped. Please enter it again."
+import.password_not_stored:
+  en: "The password of connection %{label} could not be saved to the key store: %{reason}"
+msg.reopen_tab:
+  en: "The connection was changed. Close and reopen its tab for the changes to take effect."

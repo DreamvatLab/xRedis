@@ -15,3 +15,5 @@ gpui-kit.workspace = true
 
 [dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }
+# GUI 测试用假 Backend
+xredis-app = { workspace = true, features = ["test-support"] }

@@ -132,7 +132,13 @@ fn p03_connections_are_sorted_by_ordinal_then_updated_desc() {
 fn p66_startup_warnings_are_shown_and_the_app_keeps_running() {
     let mut app = App::new();
     app.update(Msg::StartupDone(Box::new(StartupData {
-        warnings: vec!["Config file broken; it was saved as config.json.broken.".into()],
+        warnings: vec![StartupWarning::Config(
+            xredis_core::config::ConfigWarning::CorruptConfig {
+                path: "C:/x/config.json".into(),
+                reason: "expected value at line 1 column 1".into(),
+                backup: Some("C:/x/config.json.broken".into()),
+            },
+        )],
         ..Default::default()
     })));
     assert!(app.started);
@@ -773,7 +779,6 @@ fn editor_save_success_closes_the_editor_and_reloads_the_list() {
     let cmds = app.update(Msg::ConnectionSaved(Ok(Saved {
         outcome: xredis_core::config::SaveOutcome {
             id,
-            warnings: vec![],
             password_error: None,
         },
         keystore_degraded: false,
@@ -797,7 +802,6 @@ fn a_password_that_could_not_be_stored_is_a_warning_not_a_failure() {
     app.update(Msg::ConnectionSaved(Ok(Saved {
         outcome: xredis_core::config::SaveOutcome {
             id: ConnId::new(),
-            warnings: vec!["English sentence for logs".into()],
             password_error: Some("locked".into()),
         },
         keystore_degraded: false,
@@ -812,12 +816,6 @@ fn a_password_that_could_not_be_stored_is_a_warning_not_a_failure() {
             .iter()
             .any(|t| t.contains("password could not be stored: locked")),
         "{texts:?}"
-    );
-    assert!(
-        texts
-            .iter()
-            .all(|t| !t.contains("English sentence for logs")),
-        "the UI must not show core's English sentence"
     );
 }
 
@@ -1219,7 +1217,6 @@ fn keystore_degradation_is_announced_exactly_once() {
     app.update(Msg::ConnectionSaved(Ok(Saved {
         outcome: xredis_core::config::SaveOutcome {
             id: ConnId::new(),
-            warnings: vec![],
             password_error: None,
         },
         keystore_degraded: true,
@@ -1233,7 +1230,6 @@ fn keystore_degradation_found_later_is_announced_once_too() {
     let saved = || Saved {
         outcome: xredis_core::config::SaveOutcome {
             id: ConnId::new(),
-            warnings: vec![],
             password_error: None,
         },
         keystore_degraded: true,
@@ -1255,7 +1251,15 @@ fn startup_reports_v1_import_and_language_packs() {
     app.update(Msg::StartupDone(Box::new(StartupData {
         import: Some(ImportSummary {
             connections: 3,
-            warnings: vec!["Skipped connection x: invalid port 70000".into()],
+            warnings: vec![
+                xredis_core::v1_import::ImportWarning::InvalidPort {
+                    label: "x".into(),
+                    port: 70000,
+                },
+                xredis_core::v1_import::ImportWarning::PasswordUndecryptable {
+                    label: "prod".into(),
+                },
+            ],
             error: None,
         }),
         packs: crate::i18n::PackReport {
@@ -1284,7 +1288,8 @@ fn startup_reports_v1_import_and_language_packs() {
     assert!(
         texts
             .iter()
-            .any(|(l, t)| *l == Level::Warn && t.contains("invalid port 70000")),
+            .any(|(l, t)| *l == Level::Warn
+                && t.contains("Skipped connection x: invalid port 70000.")),
         "{texts:?}"
     );
     assert!(

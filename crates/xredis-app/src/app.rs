@@ -15,7 +15,7 @@ use xredis_core::consts::WINDOW_MIN_HEIGHT;
 use xredis_core::consts::WINDOW_MIN_WIDTH;
 use xredis_core::{Error, Result};
 
-use crate::errors::describe;
+use crate::errors::{describe, describe_import_warning, describe_startup_warning};
 use crate::forms::{ConnectionEditor, SettingsEditor};
 use crate::i18n::{export_template, resolve_language, tr, tr_with};
 use crate::keylist::{Ctx as KeysCtx, KeyList, KeysMsg};
@@ -572,7 +572,7 @@ impl App {
         }
         // 配置的问题(坏文件已备份、目录不可用):提示,用默认配置继续,不崩溃(P-66)
         for w in data.warnings {
-            let text = self.t_with("msg.config_warning", &[("warning", &w)]);
+            let text = describe_startup_warning(&self.lang, &w);
             self.note(Level::Warn, text, true);
         }
         if let Some(import) = data.import {
@@ -588,7 +588,7 @@ impl App {
                     );
                     self.note(Level::Success, text, true);
                     for w in import.warnings {
-                        let text = self.t_with("msg.import_warning", &[("warning", &w)]);
+                        let text = describe_import_warning(&self.lang, &w);
                         self.note(Level::Warn, text, true);
                     }
                 }
@@ -804,6 +804,11 @@ impl App {
                 self.editor = None;
                 let text = self.t("msg.connection_saved");
                 self.note(Level::Success, text, true);
+                // 已经打开的 Tab 用的是旧配置建的连接,不会自动重连(和 v1 一致):提示重新打开才生效
+                if self.tab(saved.outcome.id).is_some() {
+                    let text = self.t("msg.reopen_tab");
+                    self.note(Level::Info, text, true);
+                }
                 // 连接已保存,密码没存上:提示,不当成保存失败(界面会重试造成重复连接)
                 if let Some(reason) = &saved.outcome.password_error {
                     let text = self.t_with("msg.password_not_saved", &[("reason", reason)]);

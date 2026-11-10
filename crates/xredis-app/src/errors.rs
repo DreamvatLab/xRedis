@@ -5,7 +5,11 @@
 
 use bytes::Bytes;
 use xredis_core::Error;
+use xredis_core::config::ConfigWarning;
 use xredis_core::error::{ClipboardStage, Entity};
+use xredis_core::v1_import::ImportWarning;
+
+use crate::msg::StartupWarning;
 
 use crate::i18n::{tr, tr_with};
 
@@ -155,6 +159,62 @@ pub fn describe(lang: &str, err: &Error) -> String {
         Error::BlockingTimeout { command, secs } => w(
             "err.blocking_timeout",
             &[("command", command), ("secs", &secs.to_string())],
+        ),
+    }
+}
+
+/// 启动警告翻译成界面文字。`match` 里没有通配分支,加了新的警告种类这里编译不过。
+pub fn describe_startup_warning(lang: &str, w: &StartupWarning) -> String {
+    match w {
+        StartupWarning::Config(ConfigWarning::CorruptConfig {
+            path,
+            reason,
+            backup,
+        }) => match backup {
+            Some(b) => tr_with(
+                lang,
+                "warn.config_corrupt_backed_up",
+                &[
+                    ("path", &path.display().to_string()),
+                    ("reason", reason),
+                    ("backup", &b.display().to_string()),
+                ],
+            ),
+            None => tr_with(
+                lang,
+                "warn.config_corrupt_not_backed_up",
+                &[("path", &path.display().to_string()), ("reason", reason)],
+            ),
+        },
+        StartupWarning::ConfigDirUnusable { reason, fallback } => tr_with(
+            lang,
+            "warn.config_dir_unusable",
+            &[
+                ("reason", reason),
+                ("fallback", &fallback.display().to_string()),
+            ],
+        ),
+    }
+}
+
+/// v1 导入的提示翻译成界面文字。
+pub fn describe_import_warning(lang: &str, w: &ImportWarning) -> String {
+    match w {
+        ImportWarning::InvalidId { label } => {
+            tr_with(lang, "import.invalid_id", &[("label", label)])
+        }
+        ImportWarning::InvalidPort { label, port } => tr_with(
+            lang,
+            "import.invalid_port",
+            &[("label", label), ("port", &port.to_string())],
+        ),
+        ImportWarning::PasswordUndecryptable { label } => {
+            tr_with(lang, "import.password_undecryptable", &[("label", label)])
+        }
+        ImportWarning::PasswordNotStored { label, reason } => tr_with(
+            lang,
+            "import.password_not_stored",
+            &[("label", label), ("reason", reason)],
         ),
     }
 }

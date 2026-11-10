@@ -8,8 +8,11 @@ use std::path::PathBuf;
 
 use bytes::Bytes;
 use xredis_core::Error;
-use xredis_core::config::{ConnId, ConnectionConfig, ConnectionDraft, SaveOutcome, Settings};
+use xredis_core::config::{
+    ConfigWarning, ConnId, ConnectionConfig, ConnectionDraft, SaveOutcome, Settings,
+};
 use xredis_core::conn::info::ConnectionInfo;
+use xredis_core::v1_import::ImportWarning;
 
 use crate::i18n::PackReport;
 pub use crate::keylist::KeysMsg;
@@ -22,8 +25,8 @@ pub type Epoch = u64;
 pub struct StartupData {
     pub settings: Settings,
     pub connections: Vec<ConnectionConfig>,
-    /// 要显示给用户的提示(配置文件损坏已备份、配置目录不可用改用临时目录……)。
-    pub warnings: Vec<String>,
+    /// 要显示给用户的提示(配置文件损坏已备份、配置目录不可用改用临时目录……)。结构化的,界面按种类翻译。
+    pub warnings: Vec<StartupWarning>,
     /// 系统密钥存储不可用,密码只在内存里。
     pub keystore_degraded: bool,
     /// 第一次启动时从 v1 导入的结果。
@@ -32,10 +35,19 @@ pub struct StartupData {
     pub packs: PackReport,
 }
 
+/// 启动时不影响继续运行的问题。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartupWarning {
+    /// 打开配置时的问题(配置文件损坏已备份……)。
+    Config(ConfigWarning),
+    /// 配置目录不能用(路径被文件占用、没有权限),改用临时目录,改动退出后不保留。
+    ConfigDirUnusable { reason: String, fallback: PathBuf },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportSummary {
     pub connections: usize,
-    pub warnings: Vec<String>,
+    pub warnings: Vec<ImportWarning>,
     /// 导入本身失败(v1 文件损坏)。
     pub error: Option<String>,
 }

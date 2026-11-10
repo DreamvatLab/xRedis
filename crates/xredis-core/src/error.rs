@@ -111,6 +111,83 @@ pub enum Error {
     /// ZSet 分数不是数字。
     #[error("Score must be a number")]
     ScoreNaN,
+
+    // ---- R-05:复制粘贴、控制台、Pub/Sub ----
+    /// 复制时累计的 DUMP 字节超过上限,立即中止(L-14)。`key` 是越线的那个。
+    #[error("Too much data to copy: reached {total} bytes at key '{}' after {copied} key(s), limit is {limit}", lossy(.key))]
+    CopyTooLarge {
+        total: u64,
+        limit: u64,
+        copied: usize,
+        key: Bytes,
+    },
+    /// 一个 key 都没复制成(没选、或者全部被跳过)。
+    #[error("Nothing was copied ({} key(s) skipped)", .skipped.len())]
+    NothingCopied { skipped: Vec<Skipped> },
+    /// 剪贴板里没有 `REDIS:` 开头的数据。
+    #[error("No Redis data found in the clipboard")]
+    ClipboardNotRedis,
+    /// 剪贴板数据损坏:哪一步出的错和原始报错。
+    #[error("Clipboard data is corrupt ({stage}): {detail}")]
+    ClipboardCorrupt {
+        stage: ClipboardStage,
+        detail: String,
+    },
+    /// 解压后超过上限,防解压炸弹(L-14)。
+    #[error("Clipboard data expands beyond the {limit} byte paste limit")]
+    PasteTooLarge { limit: u64 },
+    /// 不覆盖模式下有同名 key,整体拒绝,一个都没写。
+    #[error("{} of {total} key(s) already exist and were not overwritten", .conflicts.len())]
+    PasteConflicts { conflicts: Vec<Bytes>, total: usize },
+    /// 逐个 RESTORE 时某个 key 失败(前面的已经写入)。
+    #[error("Failed to restore key '{}': {detail}", lossy(.key))]
+    RestoreFailed { key: Bytes, detail: String },
+    /// 控制台命令分词失败,不发送。
+    #[error("Invalid command syntax: {0}")]
+    CommandSyntax(crate::console::SplitError),
+    /// 会让连接进入特殊模式的命令,控制台拒绝。
+    #[error(
+        "'{command}' would put the connection into a special mode and is not allowed in the console"
+    )]
+    CommandRejected { command: String },
+    /// 阻塞命令在控制台里等了太久,放弃。
+    #[error("'{command}' timed out after {secs}s")]
+    BlockingTimeout { command: String, secs: u64 },
+}
+
+/// 复制时被跳过的 key 和原因。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Skipped {
+    pub key: Bytes,
+    pub reason: SkipReason,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkipReason {
+    /// key 不存在(多半是刚好过期)。
+    Missing,
+    /// 名字不是合法 UTF-8:v1 兼容的剪贴板格式里 key 名是字符串,放不下。
+    BinaryName,
+    /// DUMP 失败,带 Redis 的报错。
+    Failed(String),
+}
+
+/// 剪贴板数据解码到哪一步出错。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardStage {
+    Base64,
+    Decompress,
+    Parse,
+}
+
+impl fmt::Display for ClipboardStage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            ClipboardStage::Base64 => "base64",
+            ClipboardStage::Decompress => "decompress",
+            ClipboardStage::Parse => "parse",
+        })
+    }
 }
 
 impl From<fred::error::Error> for Error {

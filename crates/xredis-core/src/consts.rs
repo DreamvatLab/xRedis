@@ -47,3 +47,13 @@ pub const TTL_MAX: i64 = 2_147_483_647;
 
 /// 关闭连接时等 `quit` 的上限。服务器失联时 `quit` 要等满命令超时,超过这个时间就强制停掉连接任务。
 pub const QUIT_TIMEOUT_MS: u64 = 1_500;
+
+/// 复制时 DUMP 字节累计上限。剪贴板这条路上多份缓冲同时驻留,峰值是原始数据的 6 到 10 倍。
+pub const COPY_MAX_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
+/// 粘贴时解压后的上限。必须严格大于复制上限:JSON 数字数组本身就比原始数据大 3 到 5 倍,
+/// 两者取齐会导致自己复制的数据反而粘不回来。
+pub const PASTE_MAX_DECOMPRESSED_BYTES: u64 = 4 * COPY_MAX_TOTAL_BYTES;
+/// 剪贴板数据的前缀(和 v1 相同)。
+pub const CLIPBOARD_PREFIX: &str = "REDIS:";
+/// 控制台阻塞命令的等待上限。
+pub const CONSOLE_BLOCKING_TIMEOUT_SECS: u64 = 30;

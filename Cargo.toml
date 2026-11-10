@@ -27,6 +27,9 @@ urlencoding = "2"
 fred = { version = "10", features = ["enable-rustls"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
 pem = "4"
+# 剪贴板格式和 v1 相同(base64 加 zlib),版本也和 v1 一致
+base64 = "0.23"
+flate2 = "1"
 bytes = "1"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 rustls-native-certs = "0.8"

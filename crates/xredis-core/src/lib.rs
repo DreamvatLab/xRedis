@@ -2,10 +2,13 @@
 
 pub mod config;
 pub mod conn;
+pub mod console;
 pub mod consts;
 pub mod error;
 pub mod keys;
 pub mod keystore;
+pub mod pubsub;
+pub mod transfer;
 pub mod types;
 pub mod v1_import;
 mod value;

@@ -17,7 +17,7 @@ start() {
   fi
   docker rm -f "$NAME" >/dev/null 2>&1 || true
   docker run -d --name "$NAME" -p "127.0.0.1:${PORT}:6379" "$IMAGE" \
-    redis-server --requirepass "$PASSWORD" --save "" --appendonly no >/dev/null
+    redis-server --requirepass "$PASSWORD" --save "" --appendonly no --databases 20 >/dev/null
   for _ in $(seq 1 30); do
     if docker exec "$NAME" redis-cli -a "$PASSWORD" --no-auth-warning ping 2>/dev/null | grep -q PONG; then
       echo "$NAME ready on 127.0.0.1:${PORT}"
@@ -42,7 +42,8 @@ case "${1:-}" in
     start
     export XREDIS_TEST_REDIS_URL="redis://default:${PASSWORD}@127.0.0.1:${PORT}"
     export XREDIS_TEST_REDIS_CONTAINER="$NAME"
-    timeout "$TEST_TIMEOUT" cargo test "$@" -- --ignored
+    # keyring_manual 会碰真实的系统钥匙串,只手动跑,这里跳过
+    timeout "$TEST_TIMEOUT" cargo test "$@" -- --ignored --skip keyring_manual
     ;;
   *)
     echo "usage: $0 start|stop|test [cargo args]" >&2

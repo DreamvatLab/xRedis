@@ -5,15 +5,25 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[lib]
+name = "xredis_gpui"
+path = "src/lib.rs"
+
 [[bin]]
 name = "xredis"
 path = "src/main.rs"
 
 [dependencies]
+xredis-core.workspace = true
 xredis-app.workspace = true
 gpui-kit.workspace = true
+async-channel.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
 
 [dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }
 # GUI 测试用假 Backend
 xredis-app = { workspace = true, features = ["test-support"] }
+tempfile.workspace = true

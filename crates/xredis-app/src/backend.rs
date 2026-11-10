@@ -149,8 +149,20 @@ impl CoreBackend {
         })
     }
 
+    /// 实际在用的配置目录(原目录不可用时是临时目录)。文件日志放在它下面的 `logs/`。
     pub fn config_dir(&self) -> &std::path::Path {
         &self.config_dir
+    }
+
+    /// 配置里记着的窗口尺寸和最大化状态:GUI 在**创建窗口之前**同步取,启动时直接按它开窗口(P-61)。
+    pub fn saved_window(&self) -> (u32, u32, bool) {
+        let s = self.store.settings();
+        (s.window_width, s.window_height, s.is_maximized)
+    }
+
+    /// 配置里记着的界面语言(已解析成可用的),启动时用它调 `apply_global_locale`。
+    pub fn saved_language(&self) -> String {
+        crate::i18n::resolve_language(&self.store.settings().language)
     }
 
     pub fn manager(&self) -> &Arc<ConnManager> {

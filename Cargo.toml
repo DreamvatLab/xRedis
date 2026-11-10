@@ -22,6 +22,9 @@ keyring = "4"
 # 只用于 v1 导入时解密 v1 的密码(算法和 v1 一致)
 magic-crypt = "5"
 tracing = "0.1"
+# 文件日志(只用在 xredis-gpui):按天轮转
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "ansi"] }
+tracing-appender = "0.2"
 urlencoding = "2"
 # Redis 客户端:v1 用它踩平了重连和超时的坑;TLS 走 rustls
 fred = { version = "10", features = ["enable-rustls"] }

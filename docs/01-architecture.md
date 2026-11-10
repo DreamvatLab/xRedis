@@ -121,7 +121,7 @@ impl App {
 
 - `trait Backend`:app 访问 core 的唯一入口(连接、命令、配置、密钥),要能做成 `Arc<dyn Backend>`(用 `async-trait` 或返回 `BoxFuture`)。生产实现包 core;测试实现是内存假数据,可以注入延迟和错误。
 - `Runtime`:持有 tokio 运行时、`Arc<dyn Backend>` 和 `async_channel::Sender<Msg>`。`spawn(BackendCmd)` 执行后把结果发回 Msg。会持续出结果的任务(扫到底、订阅)每批发一个 Msg。
-- **取消**:可停止的任务带 `CancellationToken`(tokio-util),App 保存 token,Stop 时取消。
+- **取消**:~~可停止的任务带 `CancellationToken`~~。改为(架构师 2026-11-10,第 24 节):长任务拆成"一批一条命令",每批的结果回来后由 App 决定要不要发下一批,Stop 就是不再发下一批;已经在路上的那一批结果照常收下(或按代号丢弃)。不需要取消令牌。
 - **过期结果**:会被新请求覆盖的结果(扫描、key 详情、成员列表)带代号 `gen`,App 只收当前代号的。
 - **并发上限**:key 详情同时最多 `POOL_SIZE` 个请求,同一个 key 的请求合并。和连接池大小用同一个常量。
 - **已加载标志**:长度和 TTL 用 `Option` 或显式标志表示是否已加载,不能用 -1 或 0 推断。

@@ -50,7 +50,7 @@ Redis 的 key、field、member、value 都是二进制。**core 里一律用 `by
 |---|---|
 | `error` | 统一的 `Error`(thiserror),区分:连接失败、认证失败、超时、Redis 返回的错误、业务规则(key 已存在、EXPIRE 0 等)、配置、体量超限。替代 v1 的约 40 处错误样板 |
 | `config` | `ConfigStore`:设置和连接列表,JSON 原子写,缺字段补默认值,坏文件改名留存。v1 导入。见下 |
-| `secret` | `trait SecretStore`(按连接 id 存取删密码);`KeyringStore`(系统钥匙串)和 `MemoryStore`(测试用,也是钥匙串不可用时的降级) |
+| `keystore` | `trait KeyStore`(按连接 id 存取删密码);`KeyringStore`(系统钥匙串)和 `MemoryStore`(测试用,也是钥匙串不可用时的降级) |
 | `conn` | `ConnManager`:每个连接的连接池、订阅客户端、控制台客户端;建连串行化和关闭纪元;切库;TLS |
 | `keys` | 通用的游标扫描(SCAN/HSCAN/SSCAN/ZSCAN 共用一份实现)、key 详情、删除、改名、TTL |
 | `types` | String、Hash、List、Set、ZSet 的读写,改名类操作用事务 |
@@ -63,7 +63,7 @@ Redis 的 key、field、member、value 都是二进制。**core 里一律用 `by
 
 ```rust
 pub struct ConnId(Ulid);
-pub struct ConnectionConfig {          // 不含密码,密码在 SecretStore
+pub struct ConnectionConfig {          // 不含密码,密码在 KeyStore
     pub id: ConnId, pub name: String, pub host: String, pub port: u16,
     pub ordinal: i32, pub selected_db: u32, pub username: Option<String>,
     pub tls: Option<TlsConfig>, pub created_on_utc: i64, pub updated_on_utc: i64,
@@ -81,7 +81,7 @@ pub struct ScanPage<T> { pub items: Vec<T>, pub cursor: u64 }
 
 - 位置:`dirs::data_local_dir()/xRedis/v2/config.json`(Windows 是 `%LOCALAPPDATA%\xRedis\v2\`),日志在同目录的 `logs/`,按天轮转,保留 7 个。**不和 v1 共用文件。**
 - 写法照 v1:内存全量缓存;每次写整份落盘,先写 `.tmp` 再替换;落盘失败回滚内存;解析失败的文件改名为 `.broken` 留存,然后用默认配置继续运行。
-- **密码存系统钥匙串**(service `xRedis`,account 是连接 id),配置文件里不存密码,任何形式都不存。钥匙串不可用时(比如 Linux 没有 Secret Service)降级为只在内存里保存到程序退出,并在消息栏提示一次。
+- **密码存系统钥匙串**(service `xRedis`,account 是连接 id),配置文件里不存密码,任何形式都不存。钥匙串不可用时(比如 Linux 上没有可用的钥匙串服务)降级为只在内存里保存到程序退出,并在消息栏提示一次。
 - **v1 导入**:第一次启动时如果 v2 的配置不存在、v1 的 `%LOCALAPPDATA%\xRedis\config.json` 存在(其他平台按 v1 的 `dirs::data_local_dir()/xRedis/config.json`),就**只读**导入:连接(保留 id)、设置、窗口尺寸;密码用 v1 写死的密钥解密(见 v1 `src-tauri/src/handlers/settings.rs`)后存进钥匙串。解密失败的密码跳过并提示。v2 配置里记下 `imported_from_v1` 时间,以后不再导入。**绝不写 v1 的文件。**
 
 ### 连接管理(照 v1,这是踩坑最多的地方)

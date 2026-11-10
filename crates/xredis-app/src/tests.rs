@@ -25,6 +25,15 @@ fn app_sees_core() {
 // 测试用的小工具
 // ---------------------------------------------------------------------------
 
+/// 一个写配置失败的错误(磁盘满)。
+fn disk_full() -> Error {
+    Error::Io {
+        action: xredis_core::error::IoAction::ReplaceConfigFile,
+        path: std::path::PathBuf::from("C:/data/config.json"),
+        source: std::io::Error::other("disk full"),
+    }
+}
+
 fn cfg(name: &str, ordinal: i32, updated: i64) -> ConnectionConfig {
     ConnectionConfig {
         id: ConnId::new(),
@@ -205,11 +214,7 @@ fn p62_decline_saves_first_then_exits_even_if_saving_fails() {
         );
         let after = app.update(Msg::SettingsSaved {
             token,
-            result: if save_fails {
-                Err(Error::Config("disk full".into()))
-            } else {
-                Ok(())
-            },
+            result: if save_fails { Err(disk_full()) } else { Ok(()) },
         });
         assert!(
             matches!(platform_cmds(&after)[..], [PlatformCmd::Exit]),
@@ -825,7 +830,7 @@ fn editor_save_failure_keeps_the_editor_open_with_the_reason() {
     let mut app = ready_app(vec![]);
     app.update(Msg::OpenEditor(None));
     app.update(Msg::EditorSave);
-    app.update(Msg::ConnectionSaved(Err(Error::Config("disk full".into()))));
+    app.update(Msg::ConnectionSaved(Err(disk_full())));
     let e = editor_of(&app);
     assert!(!e.saving && e.can_save());
     assert!(e.save_error.as_deref().unwrap().contains("disk full"));
@@ -895,7 +900,7 @@ fn a_failed_delete_reports_and_reloads_the_list_from_the_backend() {
     let mut app = ready_app(vec![c]);
     let cmds = app.update(Msg::ConnectionDeleted {
         id,
-        result: Err(Error::Config("locked".into())),
+        result: Err(disk_full()),
     });
     assert!(matches!(
         backend_cmds(&cmds)[..],
@@ -1015,7 +1020,7 @@ fn p60_settings_save_applies_only_after_the_backend_confirms() {
     // 失败:面板留着,可以再点
     app.update(Msg::SettingsSaved {
         token,
-        result: Err(Error::Config("disk full".into())),
+        result: Err(disk_full()),
     });
     assert!(app.settings_editor.is_some() && !app.settings_editor.as_ref().unwrap().saving);
     assert_eq!(app.settings.scan_batch, 500);
@@ -1174,7 +1179,7 @@ fn p64_message_bar_keeps_the_latest_50() {
 
     // 消息带时间戳(App 自己记的消息用注入的时钟)
     let before = t.load(Ordering::SeqCst);
-    app.update(Msg::WindowSaved(Err(Error::Config("x".into()))));
+    app.update(Msg::WindowSaved(Err(disk_full())));
     assert!(app.messages.latest().unwrap().at_ms >= before);
 }
 
@@ -1433,16 +1438,155 @@ fn p61_window_defaults_and_minimum() {
 #[test]
 fn every_core_error_kind_has_a_translation_and_carries_its_parameters() {
     use bytes::Bytes;
-    use xredis_core::error::{ClipboardStage, Entity, SkipReason, Skipped};
+    use xredis_core::error::{
+        ClipboardStage, Entity, FieldRule, FormField, IoAction, SkipReason, Skipped, TlsProblem,
+    };
     let d = |e: Error| crate::errors::describe("en", &e);
     let b = |s: &'static str| Bytes::from_static(s.as_bytes());
 
     let cases: Vec<(Error, Vec<&str>)> = vec![
-        (Error::Config("c".into()), vec!["Configuration error", "c"]),
+        (
+            Error::Serialize { detail: "s".into() },
+            vec!["Could not write the configuration", "s"],
+        ),
+        (
+            Error::ClientConfig {
+                detail: "bad url".into(),
+            },
+            vec!["connection settings are not valid", "bad url"],
+        ),
         (Error::KeyStore("k".into()), vec!["Key store error", "k"]),
-        (Error::Rule("r".into()), vec!["r"]),
-        (Error::NotFound("n".into()), vec!["Not found", "n"]),
-        (Error::Import("i".into()), vec!["Import failed", "i"]),
+        (
+            Error::ConnectionNotFound(ConnId::new()),
+            vec!["no longer exists"],
+        ),
+        (
+            Error::ImportParse {
+                path: "C:/v1/config.json".into(),
+                detail: "expected value".into(),
+            },
+            vec!["Import failed", "C:/v1/config.json", "expected value"],
+        ),
+        (
+            Error::InvalidScoreReply { value: b("abc") },
+            vec!["not a number", "abc"],
+        ),
+        // 表单字段:字段名和规则的数值都翻译、带进去
+        (
+            Error::InvalidField {
+                field: FormField::Host,
+                rule: FieldRule::Required,
+            },
+            vec!["Host is required"],
+        ),
+        (
+            Error::InvalidField {
+                field: FormField::Port,
+                rule: FieldRule::Range { min: 1, max: 65535 },
+            },
+            vec!["Port must be between 1 and 65535"],
+        ),
+        (
+            Error::InvalidField {
+                field: FormField::AutoScanLimit,
+                rule: FieldRule::AtMost { max: 100_000 },
+            },
+            vec!["Auto-scan limit cannot exceed 100000"],
+        ),
+        (
+            Error::InvalidField {
+                field: FormField::ConnectionId,
+                rule: FieldRule::Invalid {
+                    value: "xyz".into(),
+                    detail: "bad char".into(),
+                },
+            },
+            vec!["Connection id", "'xyz'", "bad char"],
+        ),
+        // 每种文件操作一句话,路径和系统报错原样带进去
+        (
+            Error::Io {
+                action: IoAction::ReadV1Config,
+                path: "C:/a".into(),
+                source: std::io::Error::other("denied"),
+            },
+            vec!["v1 configuration file", "C:/a", "denied"],
+        ),
+        (
+            Error::Io {
+                action: IoAction::ReadCertFile,
+                path: "C:/a".into(),
+                source: std::io::Error::other("denied"),
+            },
+            vec!["certificate file", "C:/a", "denied"],
+        ),
+        (
+            Error::Io {
+                action: IoAction::CreateConfigDir,
+                path: "C:/a".into(),
+                source: std::io::Error::other("denied"),
+            },
+            vec!["configuration folder", "C:/a", "denied"],
+        ),
+        (
+            Error::Io {
+                action: IoAction::ReadConfigFile,
+                path: "C:/a".into(),
+                source: std::io::Error::other("denied"),
+            },
+            vec!["Could not read the configuration file", "C:/a", "denied"],
+        ),
+        (
+            Error::Io {
+                action: IoAction::WriteTempFile,
+                path: "C:/a".into(),
+                source: std::io::Error::other("denied"),
+            },
+            vec!["temporary file", "C:/a", "denied"],
+        ),
+        (
+            Error::Io {
+                action: IoAction::ReplaceConfigFile,
+                path: "C:/a".into(),
+                source: std::io::Error::other("denied"),
+            },
+            vec!["Could not replace the configuration file", "C:/a", "denied"],
+        ),
+        // TLS:每种问题一句话
+        (
+            Error::Tls(TlsProblem::NotPem {
+                path: "C:/k.pem".into(),
+                detail: "no begin line".into(),
+            }),
+            vec!["C:/k.pem", "not a valid PEM", "no begin line"],
+        ),
+        (
+            Error::Tls(TlsProblem::KeyEncrypted),
+            vec!["encrypted", "openssl pkcs8"],
+        ),
+        (
+            Error::Tls(TlsProblem::KeyFormatUnsupported {
+                tag: "OPENSSH PRIVATE KEY".into(),
+            }),
+            vec!["OPENSSH PRIVATE KEY", "Supported"],
+        ),
+        (
+            Error::Tls(TlsProblem::CaInvalid {
+                path: "C:/ca.pem".into(),
+                detail: "bad der".into(),
+            }),
+            vec!["CA certificate", "C:/ca.pem", "bad der"],
+        ),
+        (
+            Error::Tls(TlsProblem::CertKeyMismatch {
+                detail: "mismatch".into(),
+            }),
+            vec!["do not match", "mismatch"],
+        ),
+        (
+            Error::Tls(TlsProblem::CertKeyIncomplete),
+            vec!["provided together"],
+        ),
         (
             Error::Connect("refused".into()),
             vec!["Could not connect", "refused"],

@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use crate::config::{ConfigStore, ConnId, ConnectionConfig, TlsConfig, now_ms};
 use crate::consts::*;
-use crate::error::{Error, Result};
+use crate::error::{Error, IoAction, Result};
 
 /// v1 的配置文件路径。
 pub fn v1_config_path() -> Option<PathBuf> {
@@ -137,14 +137,16 @@ pub fn import_v1_if_first_run(store: &ConfigStore, v1_path: &Path) -> Result<Opt
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(source) => {
             return Err(Error::Io {
-                action: "read v1 config",
+                action: IoAction::ReadV1Config,
                 path: v1_path.to_path_buf(),
                 source,
             });
         }
     };
-    let v1: V1File = serde_json::from_slice(&bytes)
-        .map_err(|e| Error::Import(format!("{} could not be parsed: {e}", v1_path.display())))?;
+    let v1: V1File = serde_json::from_slice(&bytes).map_err(|e| Error::ImportParse {
+        path: v1_path.to_path_buf(),
+        detail: e.to_string(),
+    })?;
 
     let mut report = ImportReport::default();
     let mut connections = Vec::new();
@@ -394,7 +396,7 @@ mod tests {
         let (store, _) = open(&tmp.path().join("v2"));
         assert!(matches!(
             import_v1_if_first_run(&store, &v1),
-            Err(Error::Import(_))
+            Err(Error::ImportParse { .. })
         ));
         assert!(!store.path().exists());
         assert!(store.imported_from_v1().is_none());

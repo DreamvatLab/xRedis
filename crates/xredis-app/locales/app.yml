@@ -245,18 +245,62 @@ privacy.contact:
 # ---- 错误(core 的错误按种类翻译;名字等参数原样带出) ----
 err.title:
   en: "Error"
-err.config:
-  en: "Configuration error: %{detail}"
-err.io:
-  en: "Failed to %{action} %{path}: %{detail}"
+err.serialize:
+  en: "Could not write the configuration: %{detail}"
+err.client_config:
+  en: "The connection settings are not valid: %{detail}"
+err.tls.not_pem:
+  en: "%{path} is not a valid PEM file: %{detail}"
+err.tls.key_encrypted:
+  en: "The client private key is encrypted. Decrypt it first: openssl pkcs8 -topk8 -nocrypt -in client.key -out decrypted.key"
+err.tls.key_unsupported:
+  en: "Unsupported private key format '%{tag}'. Supported: PRIVATE KEY (PKCS#8), RSA PRIVATE KEY (PKCS#1), EC PRIVATE KEY (SEC1)."
+err.tls.ca_invalid:
+  en: "The CA certificate %{path} is not valid: %{detail}"
+err.tls.cert_key_mismatch:
+  en: "The client certificate and key do not match or are not valid: %{detail}"
+err.tls.cert_key_incomplete:
+  en: "The client certificate and the client key must be provided together."
+err.io.read_v1_config:
+  en: "Could not read the v1 configuration file %{path}: %{detail}"
+err.io.read_cert_file:
+  en: "Could not read the certificate file %{path}: %{detail}"
+err.io.create_config_dir:
+  en: "Could not create the configuration folder %{path}: %{detail}"
+err.io.read_config_file:
+  en: "Could not read the configuration file %{path}: %{detail}"
+err.io.write_temp_file:
+  en: "Could not write the temporary file %{path}: %{detail}"
+err.io.replace_config_file:
+  en: "Could not replace the configuration file %{path}: %{detail}"
+field.connection_id:
+  en: "Connection id"
+field.host:
+  en: "Host"
+field.port:
+  en: "Port"
+field.ordinal:
+  en: "Ordinal"
+field.scan_batch:
+  en: "Batch size"
+field.auto_scan_limit:
+  en: "Auto-scan limit"
+err.field.required:
+  en: "%{field} is required."
+err.field.range:
+  en: "%{field} must be between %{min} and %{max}."
+err.field.at_most:
+  en: "%{field} cannot exceed %{max}."
+err.field.invalid:
+  en: "%{field} '%{value}' is not valid: %{detail}"
 err.keystore:
   en: "Key store error: %{detail}"
-err.rule:
-  en: "%{detail}"
-err.not_found:
-  en: "Not found: %{detail}"
-err.import:
-  en: "Import failed: %{detail}"
+err.connection_not_found:
+  en: "The connection %{id} no longer exists."
+err.import_parse:
+  en: "Import failed: %{path} could not be parsed: %{detail}"
+err.invalid_score_reply:
+  en: "The server returned a score that is not a number: %{value}"
 err.connect:
   en: "Could not connect: %{detail}"
 err.auth:

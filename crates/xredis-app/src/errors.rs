@@ -6,7 +6,7 @@
 use bytes::Bytes;
 use xredis_core::Error;
 use xredis_core::config::ConfigWarning;
-use xredis_core::error::{ClipboardStage, Entity};
+use xredis_core::error::{ClipboardStage, Entity, FieldRule, FormField, IoAction, TlsProblem};
 use xredis_core::v1_import::ImportWarning;
 
 use crate::msg::StartupWarning;
@@ -23,6 +23,48 @@ fn entity_suffix(e: Entity) -> &'static str {
         Entity::HashField => "hash_field",
         Entity::SetMember => "set_member",
         Entity::ZSetMember => "zset_member",
+    }
+}
+
+fn io_action_key(a: IoAction) -> &'static str {
+    match a {
+        IoAction::ReadV1Config => "err.io.read_v1_config",
+        IoAction::ReadCertFile => "err.io.read_cert_file",
+        IoAction::CreateConfigDir => "err.io.create_config_dir",
+        IoAction::ReadConfigFile => "err.io.read_config_file",
+        IoAction::WriteTempFile => "err.io.write_temp_file",
+        IoAction::ReplaceConfigFile => "err.io.replace_config_file",
+    }
+}
+
+fn field_key(f: FormField) -> &'static str {
+    match f {
+        FormField::ConnectionId => "field.connection_id",
+        FormField::Host => "field.host",
+        FormField::Port => "field.port",
+        FormField::Ordinal => "field.ordinal",
+        FormField::ScanBatch => "field.scan_batch",
+        FormField::AutoScanLimit => "field.auto_scan_limit",
+    }
+}
+
+fn describe_tls(lang: &str, p: &TlsProblem) -> String {
+    let w = |key: &str, args: &[(&str, &str)]| tr_with(lang, key, args);
+    match p {
+        TlsProblem::NotPem { path, detail } => w(
+            "err.tls.not_pem",
+            &[("path", &path.display().to_string()), ("detail", detail)],
+        ),
+        TlsProblem::KeyEncrypted => tr(lang, "err.tls.key_encrypted"),
+        TlsProblem::KeyFormatUnsupported { tag } => w("err.tls.key_unsupported", &[("tag", tag)]),
+        TlsProblem::CaInvalid { path, detail } => w(
+            "err.tls.ca_invalid",
+            &[("path", &path.display().to_string()), ("detail", detail)],
+        ),
+        TlsProblem::CertKeyMismatch { detail } => {
+            w("err.tls.cert_key_mismatch", &[("detail", detail)])
+        }
+        TlsProblem::CertKeyIncomplete => tr(lang, "err.tls.cert_key_incomplete"),
     }
 }
 
@@ -54,23 +96,51 @@ pub fn human_bytes(n: u64) -> String {
 pub fn describe(lang: &str, err: &Error) -> String {
     let w = |key: &str, args: &[(&str, &str)]| tr_with(lang, key, args);
     match err {
-        Error::Config(d) => w("err.config", &[("detail", d)]),
+        Error::Serialize { detail } => w("err.serialize", &[("detail", detail)]),
+        Error::ClientConfig { detail } => w("err.client_config", &[("detail", detail)]),
+        Error::Tls(problem) => describe_tls(lang, problem),
         Error::Io {
             action,
             path,
             source,
         } => w(
-            "err.io",
+            io_action_key(*action),
             &[
-                ("action", action),
                 ("path", &path.display().to_string()),
                 ("detail", &source.to_string()),
             ],
         ),
         Error::KeyStore(d) => w("err.keystore", &[("detail", d)]),
-        Error::Rule(d) => w("err.rule", &[("detail", d)]),
-        Error::NotFound(d) => w("err.not_found", &[("detail", d)]),
-        Error::Import(d) => w("err.import", &[("detail", d)]),
+        Error::InvalidField { field, rule } => {
+            let field = tr(lang, field_key(*field));
+            match rule {
+                FieldRule::Required => w("err.field.required", &[("field", &field)]),
+                FieldRule::Range { min, max } => w(
+                    "err.field.range",
+                    &[
+                        ("field", &field),
+                        ("min", &min.to_string()),
+                        ("max", &max.to_string()),
+                    ],
+                ),
+                FieldRule::AtMost { max } => w(
+                    "err.field.at_most",
+                    &[("field", &field), ("max", &max.to_string())],
+                ),
+                FieldRule::Invalid { value, detail } => w(
+                    "err.field.invalid",
+                    &[("field", &field), ("value", value), ("detail", detail)],
+                ),
+            }
+        }
+        Error::ConnectionNotFound(id) => w("err.connection_not_found", &[("id", &id.to_string())]),
+        Error::ImportParse { path, detail } => w(
+            "err.import_parse",
+            &[("path", &path.display().to_string()), ("detail", detail)],
+        ),
+        Error::InvalidScoreReply { value } => {
+            w("err.invalid_score_reply", &[("value", &lossy(value))])
+        }
         Error::Connect(d) => w("err.connect", &[("detail", d)]),
         Error::Auth(d) => w("err.auth", &[("detail", d)]),
         Error::Timeout(d) => w("err.timeout", &[("detail", d)]),

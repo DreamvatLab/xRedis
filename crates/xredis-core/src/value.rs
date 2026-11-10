@@ -49,11 +49,8 @@ pub(crate) fn parse_score(bytes: &[u8]) -> Result<f64> {
     std::str::from_utf8(bytes)
         .ok()
         .and_then(|s| s.parse::<f64>().ok())
-        .ok_or_else(|| {
-            Error::Redis(format!(
-                "Invalid score returned by server: {}",
-                String::from_utf8_lossy(bytes)
-            ))
+        .ok_or_else(|| Error::InvalidScoreReply {
+            value: Bytes::copy_from_slice(bytes),
         })
 }
 

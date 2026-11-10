@@ -645,7 +645,7 @@ async fn save_edit_and_delete_keep_config_and_password_consistent() {
     assert!(backend.connections().await.is_empty());
     assert!(matches!(
         backend.delete_connection(id).await,
-        Err(Error::NotFound(_))
+        Err(Error::ConnectionNotFound(_))
     ));
 }
 

@@ -90,7 +90,7 @@ async fn unknown_connection_is_not_found() {
         .await
         .err()
         .unwrap();
-    assert!(matches!(err, Error::NotFound(_)), "{err:?}");
+    assert!(matches!(err, Error::ConnectionNotFound(_)), "{err:?}");
 }
 
 /// 单机配置里的三层防护都落到了 Builder 上(重连策略、命令超时、建连超时、半开探测)。

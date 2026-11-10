@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
 use crate::consts::*;
-use crate::error::{Error, Result};
+use crate::error::{Error, FieldRule, FormField, IoAction, Result};
 use crate::keystore::KeyStore;
 
 const CONFIG_FILE_NAME: &str = "config.json";
@@ -59,7 +59,13 @@ impl FromStr for ConnId {
     fn from_str(s: &str) -> Result<Self> {
         Ulid::from_string(s)
             .map(Self)
-            .map_err(|e| Error::Rule(format!("Invalid connection id '{s}': {e}")))
+            .map_err(|e| Error::InvalidField {
+                field: FormField::ConnectionId,
+                rule: FieldRule::Invalid {
+                    value: s.to_string(),
+                    detail: e.to_string(),
+                },
+            })
     }
 }
 
@@ -218,7 +224,7 @@ impl ConfigStore {
     /// 目录建不出来(比如路径被文件占用)返回 `Err`,调用方自己决定怎么继续。
     pub fn open(dir: &Path, secrets: Arc<dyn KeyStore>) -> Result<(Self, Vec<ConfigWarning>)> {
         fs::create_dir_all(dir).map_err(|source| Error::Io {
-            action: "create config directory",
+            action: IoAction::CreateConfigDir,
             path: dir.to_path_buf(),
             source,
         })?;
@@ -240,7 +246,7 @@ impl ConfigStore {
             Err(err) if err.kind() == io::ErrorKind::NotFound => (ConfigFile::default(), true),
             Err(source) => {
                 return Err(Error::Io {
-                    action: "read config file",
+                    action: IoAction::ReadConfigFile,
                     path,
                     source,
                 });
@@ -300,14 +306,21 @@ impl ConfigStore {
     /// 设置面板一保存不会把窗口尺寸打回旧值。
     pub fn save_settings(&self, new: &Settings) -> Result<()> {
         if !(SCAN_BATCH_MIN..=SCAN_BATCH_MAX).contains(&new.scan_batch) {
-            return Err(Error::Rule(format!(
-                "Batch size must be between {SCAN_BATCH_MIN} and {SCAN_BATCH_MAX}"
-            )));
+            return Err(Error::InvalidField {
+                field: FormField::ScanBatch,
+                rule: FieldRule::Range {
+                    min: i64::from(SCAN_BATCH_MIN),
+                    max: i64::from(SCAN_BATCH_MAX),
+                },
+            });
         }
         if new.auto_scan_limit > AUTO_SCAN_LIMIT_MAX {
-            return Err(Error::Rule(format!(
-                "Auto-scan limit cannot exceed {AUTO_SCAN_LIMIT_MAX}"
-            )));
+            return Err(Error::InvalidField {
+                field: FormField::AutoScanLimit,
+                rule: FieldRule::AtMost {
+                    max: i64::from(AUTO_SCAN_LIMIT_MAX),
+                },
+            });
         }
         self.mutate(|c| {
             let s = &mut c.settings;
@@ -356,7 +369,7 @@ impl ConfigStore {
             .iter()
             .find(|c| c.id == id)
             .cloned()
-            .ok_or_else(|| Error::NotFound(format!("connection {id}")))
+            .ok_or_else(|| Error::ConnectionNotFound(id))
     }
 
     /// 连接密码(来自密钥存储);没设过返回 `None`。
@@ -375,7 +388,7 @@ impl ConfigStore {
                     .connections
                     .iter_mut()
                     .find(|x| x.id == id)
-                    .ok_or_else(|| Error::NotFound(format!("connection {id}")))?;
+                    .ok_or_else(|| Error::ConnectionNotFound(id))?;
                 slot.name = draft.name.clone();
                 slot.host = draft.host.clone();
                 slot.port = draft.port;
@@ -425,7 +438,7 @@ impl ConfigStore {
                 .connections
                 .iter_mut()
                 .find(|x| x.id == id)
-                .ok_or_else(|| Error::NotFound(format!("connection {id}")))?;
+                .ok_or_else(|| Error::ConnectionNotFound(id))?;
             slot.selected_db = db;
             Ok(())
         })
@@ -436,7 +449,7 @@ impl ConfigStore {
             let before = c.connections.len();
             c.connections.retain(|x| x.id != id);
             if c.connections.len() == before {
-                return Err(Error::NotFound(format!("connection {id}")));
+                return Err(Error::ConnectionNotFound(id));
             }
             Ok(())
         })?;
@@ -450,15 +463,25 @@ impl ConfigStore {
 
 fn validate_draft(d: &ConnectionDraft) -> Result<()> {
     if d.host.trim().is_empty() {
-        return Err(Error::Rule("Host is required".into()));
+        return Err(Error::InvalidField {
+            field: FormField::Host,
+            rule: FieldRule::Required,
+        });
     }
     if d.port == 0 {
-        return Err(Error::Rule("Port must be between 1 and 65535".into()));
+        return Err(Error::InvalidField {
+            field: FormField::Port,
+            rule: FieldRule::Range { min: 1, max: 65535 },
+        });
     }
     if !(ORDINAL_MIN..=ORDINAL_MAX).contains(&d.ordinal) {
-        return Err(Error::Rule(format!(
-            "Ordinal must be between {ORDINAL_MIN} and {ORDINAL_MAX}"
-        )));
+        return Err(Error::InvalidField {
+            field: FormField::Ordinal,
+            rule: FieldRule::Range {
+                min: i64::from(ORDINAL_MIN),
+                max: i64::from(ORDINAL_MAX),
+            },
+        });
     }
     Ok(())
 }
@@ -479,13 +502,14 @@ fn backup_broken_file(path: &Path) -> Option<PathBuf> {
 
 /// 原子写入:先写临时文件,再替换目标(`fs::rename` 在各平台都会覆盖已存在的目标)。
 fn persist(config: &ConfigFile, path: &Path) -> Result<()> {
-    let json = serde_json::to_vec_pretty(config)
-        .map_err(|e| Error::Config(format!("Failed to serialize config: {e}")))?;
+    let json = serde_json::to_vec_pretty(config).map_err(|e| Error::Serialize {
+        detail: e.to_string(),
+    })?;
     let tmp = path.with_extension("json.tmp");
     if let Err(source) = fs::write(&tmp, &json) {
         let _ = fs::remove_file(&tmp);
         return Err(Error::Io {
-            action: "write temporary file",
+            action: IoAction::WriteTempFile,
             path: tmp,
             source,
         });
@@ -493,7 +517,7 @@ fn persist(config: &ConfigFile, path: &Path) -> Result<()> {
     if let Err(source) = fs::rename(&tmp, path) {
         let _ = fs::remove_file(&tmp);
         return Err(Error::Io {
-            action: "replace config file",
+            action: IoAction::ReplaceConfigFile,
             path: path.to_path_buf(),
             source,
         });
@@ -772,7 +796,7 @@ mod tests {
         assert_eq!(store.password(id).unwrap(), None);
         assert!(matches!(
             store.delete_connection(id),
-            Err(Error::NotFound(_))
+            Err(Error::ConnectionNotFound(_))
         ));
     }
 
@@ -830,26 +854,66 @@ mod tests {
     fn validation_rules() {
         let tmp = tempfile::tempdir().unwrap();
         let store = open(tmp.path());
-        let bad = |f: fn(&mut ConnectionDraft)| {
+        // 校验失败带结构化的字段和规则(界面按它们翻译),不是一句英文
+        let bad = |f: fn(&mut ConnectionDraft), field: FormField, rule: FieldRule| {
             let mut d = draft("a");
             f(&mut d);
-            assert!(matches!(store.save_connection(d), Err(Error::Rule(_))));
+            match store.save_connection(d) {
+                Err(Error::InvalidField {
+                    field: got,
+                    rule: r,
+                }) => {
+                    assert_eq!((got, r), (field, rule));
+                }
+                other => panic!("{other:?}"),
+            }
         };
-        bad(|d| d.port = 0);
-        bad(|d| d.host = "  ".into());
-        bad(|d| d.ordinal = 65536);
-        bad(|d| d.ordinal = -65536);
+        let ordinal = FieldRule::Range {
+            min: i64::from(ORDINAL_MIN),
+            max: i64::from(ORDINAL_MAX),
+        };
+        bad(
+            |d| d.port = 0,
+            FormField::Port,
+            FieldRule::Range { min: 1, max: 65535 },
+        );
+        bad(
+            |d| d.host = "  ".into(),
+            FormField::Host,
+            FieldRule::Required,
+        );
+        bad(|d| d.ordinal = 65536, FormField::Ordinal, ordinal.clone());
+        bad(|d| d.ordinal = -65536, FormField::Ordinal, ordinal);
         assert!(store.connections().is_empty());
         let mut s = Settings {
             scan_batch: 99,
             ..Settings::default()
         };
-        assert!(store.save_settings(&s).is_err());
+        let batch = Error::InvalidField {
+            field: FormField::ScanBatch,
+            rule: FieldRule::Range {
+                min: i64::from(SCAN_BATCH_MIN),
+                max: i64::from(SCAN_BATCH_MAX),
+            },
+        };
+        assert_eq!(
+            format!("{:?}", store.save_settings(&s).unwrap_err()),
+            format!("{batch:?}")
+        );
         s.scan_batch = 2001;
-        assert!(store.save_settings(&s).is_err());
+        assert_eq!(
+            format!("{:?}", store.save_settings(&s).unwrap_err()),
+            format!("{batch:?}")
+        );
         s.scan_batch = 100;
         s.auto_scan_limit = 100_001;
-        assert!(store.save_settings(&s).is_err());
+        assert!(matches!(
+            store.save_settings(&s),
+            Err(Error::InvalidField {
+                field: FormField::AutoScanLimit,
+                rule: FieldRule::AtMost { max: 100_000 }
+            })
+        ));
         s.auto_scan_limit = 0;
         store.save_settings(&s).unwrap();
     }

@@ -10,17 +10,21 @@ use fred::rustls::{ClientConfig, RootCertStore};
 use fred::types::config::TlsConnector;
 
 use crate::config::TlsConfig;
-use crate::error::{Error, Result};
+use crate::error::{Error, IoAction, Result, TlsProblem};
 
 /// 读 PEM 文件,返回(标签,DER 内容)。标签就是 `-----BEGIN xxx-----` 里的 xxx。
 fn read_pem(path: &Path) -> Result<(String, Vec<u8>)> {
     let bytes = fs::read(path).map_err(|source| Error::Io {
-        action: "read certificate file",
+        action: IoAction::ReadCertFile,
         path: path.to_path_buf(),
         source,
     })?;
-    let pem = pem::parse(bytes)
-        .map_err(|e| Error::Config(format!("{} is not a valid PEM file: {e}", path.display())))?;
+    let pem = pem::parse(bytes).map_err(|e| {
+        Error::Tls(TlsProblem::NotPem {
+            path: path.to_path_buf(),
+            detail: e.to_string(),
+        })
+    })?;
     Ok((pem.tag().to_string(), pem.into_contents()))
 }
 
@@ -36,13 +40,10 @@ pub(crate) fn parse_private_key(tag: &str, der: Vec<u8>) -> Result<PrivateKeyDer
         "PRIVATE KEY" => Ok(PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(der))),
         "RSA PRIVATE KEY" => Ok(PrivateKeyDer::Pkcs1(PrivatePkcs1KeyDer::from(der))),
         "EC PRIVATE KEY" => Ok(PrivateKeyDer::Sec1(PrivateSec1KeyDer::from(der))),
-        "ENCRYPTED PRIVATE KEY" => Err(Error::Config(
-            "The client private key is encrypted. Decrypt it first: openssl pkcs8 -topk8 -nocrypt -in client.key -out decrypted.key"
-                .into(),
-        )),
-        other => Err(Error::Config(format!(
-            "Unsupported private key format '{other}'. Supported: PRIVATE KEY (PKCS#8), RSA PRIVATE KEY (PKCS#1), EC PRIVATE KEY (SEC1)"
-        ))),
+        "ENCRYPTED PRIVATE KEY" => Err(Error::Tls(TlsProblem::KeyEncrypted)),
+        other => Err(Error::Tls(TlsProblem::KeyFormatUnsupported {
+            tag: other.to_string(),
+        })),
     }
 }
 
@@ -56,7 +57,10 @@ pub fn connector(tls: &TlsConfig) -> Result<TlsConnector> {
         Some(path) => {
             let (_, der) = read_pem(path)?;
             roots.add(der.into()).map_err(|e| {
-                Error::Config(format!("Invalid CA certificate {}: {e}", path.display()))
+                Error::Tls(TlsProblem::CaInvalid {
+                    path: path.to_path_buf(),
+                    detail: e.to_string(),
+                })
             })?;
         }
         None => {
@@ -83,16 +87,14 @@ pub fn connector(tls: &TlsConfig) -> Result<TlsConnector> {
             builder
                 .with_client_auth_cert(vec![cert_der.into()], key)
                 .map_err(|e| {
-                    Error::Config(format!(
-                        "Client certificate and key do not match or are invalid: {e}"
-                    ))
+                    Error::Tls(TlsProblem::CertKeyMismatch {
+                        detail: e.to_string(),
+                    })
                 })?
         }
         (None, None) => builder.with_no_client_auth(),
         _ => {
-            return Err(Error::Config(
-                "Client certificate and client key must be provided together".into(),
-            ));
+            return Err(Error::Tls(TlsProblem::CertKeyIncomplete));
         }
     };
     Ok(config.into())
@@ -155,7 +157,10 @@ mod tests {
         ));
         let bad = tmp.path().join("bad.pem");
         fs::write(&bad, "not a pem").unwrap();
-        assert!(matches!(read_pem(&bad), Err(Error::Config(_))));
+        assert!(matches!(
+            read_pem(&bad),
+            Err(Error::Tls(TlsProblem::NotPem { .. }))
+        ));
     }
 
     /// L-12:CA 可选,不填回落到系统根证书,不在配置层拒绝。
@@ -170,8 +175,59 @@ mod tests {
             client_cert: Some(PathBuf::from("c.pem")),
             ..TlsConfig::default()
         };
-        let err = connector(&tls).err().unwrap().to_string();
-        assert!(err.contains("together"), "{err}");
+        assert!(matches!(
+            connector(&tls),
+            Err(Error::Tls(TlsProblem::CertKeyIncomplete))
+        ));
+        let tls = TlsConfig {
+            client_key: Some(PathBuf::from("k.pem")),
+            ..TlsConfig::default()
+        };
+        assert!(matches!(
+            connector(&tls),
+            Err(Error::Tls(TlsProblem::CertKeyIncomplete))
+        ));
+    }
+
+    /// R-06b:私钥问题是结构化的种类(加密的、格式不认识的),带出标签,不是一句英文。
+    #[test]
+    fn private_key_problems_are_structured() {
+        assert!(matches!(
+            parse_private_key("ENCRYPTED PRIVATE KEY", vec![1]),
+            Err(Error::Tls(TlsProblem::KeyEncrypted))
+        ));
+        match parse_private_key("OPENSSH PRIVATE KEY", vec![1]) {
+            Err(Error::Tls(TlsProblem::KeyFormatUnsupported { tag })) => {
+                assert_eq!(tag, "OPENSSH PRIVATE KEY")
+            }
+            other => panic!("{:?}", other.err()),
+        }
+    }
+
+    /// R-06b:CA 文件是合法 PEM 但内容不是证书:`CaInvalid` 带路径和库的报错。
+    #[test]
+    fn an_invalid_ca_certificate_carries_the_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ca = tmp.path().join("ca.pem");
+        fs::write(
+            &ca,
+            "-----BEGIN CERTIFICATE-----
+AQID
+-----END CERTIFICATE-----
+",
+        )
+        .unwrap();
+        let tls = TlsConfig {
+            ca_cert: Some(ca.clone()),
+            ..TlsConfig::default()
+        };
+        match connector(&tls) {
+            Err(Error::Tls(TlsProblem::CaInvalid { path, detail })) => {
+                assert_eq!(path, ca);
+                assert!(!detail.is_empty());
+            }
+            other => panic!("{:?}", other.err()),
+        }
     }
 
     #[test]

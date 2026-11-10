@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 use bytes::Bytes;
 
+use crate::config::ConnId;
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// 出错的是哪一种东西。界面按它翻译,`Display` 的英文只用于日志。
@@ -27,6 +29,127 @@ impl fmt::Display for Entity {
     }
 }
 
+/// 配置和证书文件的 IO 操作,界面按它翻译(路径和系统报错原样带上)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IoAction {
+    ReadV1Config,
+    ReadCertFile,
+    CreateConfigDir,
+    ReadConfigFile,
+    WriteTempFile,
+    ReplaceConfigFile,
+}
+
+impl fmt::Display for IoAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            IoAction::ReadV1Config => "read v1 config",
+            IoAction::ReadCertFile => "read certificate file",
+            IoAction::CreateConfigDir => "create config directory",
+            IoAction::ReadConfigFile => "read config file",
+            IoAction::WriteTempFile => "write temporary file",
+            IoAction::ReplaceConfigFile => "replace config file",
+        })
+    }
+}
+
+/// 出问题的表单字段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormField {
+    ConnectionId,
+    Host,
+    Port,
+    Ordinal,
+    ScanBatch,
+    AutoScanLimit,
+}
+
+impl fmt::Display for FormField {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            FormField::ConnectionId => "Connection id",
+            FormField::Host => "Host",
+            FormField::Port => "Port",
+            FormField::Ordinal => "Ordinal",
+            FormField::ScanBatch => "Batch size",
+            FormField::AutoScanLimit => "Auto-scan limit",
+        })
+    }
+}
+
+/// 字段违反的规则,带范围数值。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FieldRule {
+    Required,
+    Range {
+        min: i64,
+        max: i64,
+    },
+    AtMost {
+        max: i64,
+    },
+    /// 不是合法的值;`value` 是用户给的,`detail` 是解析库的原始报错。
+    Invalid {
+        value: String,
+        detail: String,
+    },
+}
+
+impl fmt::Display for FieldRule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FieldRule::Required => f.write_str("is required"),
+            FieldRule::Range { min, max } => write!(f, "must be between {min} and {max}"),
+            FieldRule::AtMost { max } => write!(f, "cannot exceed {max}"),
+            FieldRule::Invalid { value, detail } => write!(f, "'{value}' is not valid: {detail}"),
+        }
+    }
+}
+
+/// TLS 证书和私钥的问题。路径和库的原始报错原样带上,界面按种类翻译。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TlsProblem {
+    /// 文件不是合法的 PEM。
+    NotPem { path: PathBuf, detail: String },
+    /// 私钥是加密的(要先解密)。
+    KeyEncrypted,
+    /// 私钥的 PEM 标签不认识。
+    KeyFormatUnsupported { tag: String },
+    /// CA 证书无效。
+    CaInvalid { path: PathBuf, detail: String },
+    /// 客户端证书和私钥对不上或无效。
+    CertKeyMismatch { detail: String },
+    /// 客户端证书和私钥只给了一个。
+    CertKeyIncomplete,
+}
+
+impl fmt::Display for TlsProblem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TlsProblem::NotPem { path, detail } => {
+                write!(f, "{} is not a valid PEM file: {detail}", path.display())
+            }
+            TlsProblem::KeyEncrypted => f.write_str(
+                "The client private key is encrypted. Decrypt it first: openssl pkcs8 -topk8 -nocrypt -in client.key -out decrypted.key",
+            ),
+            TlsProblem::KeyFormatUnsupported { tag } => write!(
+                f,
+                "Unsupported private key format '{tag}'. Supported: PRIVATE KEY (PKCS#8), RSA PRIVATE KEY (PKCS#1), EC PRIVATE KEY (SEC1)"
+            ),
+            TlsProblem::CaInvalid { path, detail } => {
+                write!(f, "Invalid CA certificate {}: {detail}", path.display())
+            }
+            TlsProblem::CertKeyMismatch { detail } => write!(
+                f,
+                "Client certificate and key do not match or are invalid: {detail}"
+            ),
+            TlsProblem::CertKeyIncomplete => {
+                f.write_str("Client certificate and client key must be provided together")
+            }
+        }
+    }
+}
+
 /// 名字是字节,日志里有损显示。
 fn lossy(bytes: &Bytes) -> std::borrow::Cow<'_, str> {
     String::from_utf8_lossy(bytes)
@@ -41,13 +164,19 @@ fn within(container: &Option<Bytes>) -> String {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// 配置读写失败(目录、文件、序列化)或配置内容不合法(TLS 证书等)。
-    #[error("Config error: {0}")]
-    Config(String),
-    /// 配置目录或文件的 IO 错误,带路径。
+    /// 配置序列化失败(`detail` 是序列化库的原始报错)。
+    #[error("Failed to serialize config: {detail}")]
+    Serialize { detail: String },
+    /// Redis 客户端库认为连接配置不对(地址、选项),`detail` 是库的原始报错。
+    #[error("Client configuration error: {detail}")]
+    ClientConfig { detail: String },
+    /// TLS 证书和私钥的问题。
+    #[error("{0}")]
+    Tls(TlsProblem),
+    /// 配置目录或文件的 IO 错误,带路径和系统报错。
     #[error("Failed to {action} {path}: {source}")]
     Io {
-        action: &'static str,
+        action: IoAction,
         path: PathBuf,
         #[source]
         source: std::io::Error,
@@ -55,15 +184,18 @@ pub enum Error {
     /// 密钥存储(系统钥匙串)失败。
     #[error("Key store error: {0}")]
     KeyStore(String),
-    /// 业务规则不允许(key 已存在、EXPIRE 0、输入越界等)。
-    #[error("{0}")]
-    Rule(String),
-    /// 按 id 找不到。
-    #[error("Not found: {0}")]
-    NotFound(String),
-    /// v1 导入失败。
-    #[error("v1 import failed: {0}")]
-    Import(String),
+    /// 表单字段不合规矩(连接表单、设置面板)。
+    #[error("{field} {rule}")]
+    InvalidField { field: FormField, rule: FieldRule },
+    /// 按 id 找不到连接。
+    #[error("Connection {0} was not found")]
+    ConnectionNotFound(ConnId),
+    /// v1 的配置文件读到了但解析不了。
+    #[error("v1 import failed: {} could not be parsed: {detail}", path.display())]
+    ImportParse { path: PathBuf, detail: String },
+    /// 服务器返回的分数不是数字。
+    #[error("Invalid score returned by server: {}", lossy(.value))]
+    InvalidScoreReply { value: Bytes },
     /// 连不上 Redis(网络、TLS 握手)。
     #[error("Connection failed: {0}")]
     Connect(String),
@@ -202,7 +334,7 @@ impl From<fred::error::Error> for Error {
             ErrorKind::Timeout => Error::Timeout(msg),
             ErrorKind::IO | ErrorKind::Tls => Error::Connect(msg),
             ErrorKind::Canceled => Error::Closed,
-            ErrorKind::Config | ErrorKind::Url => Error::Config(msg),
+            ErrorKind::Config | ErrorKind::Url => Error::ClientConfig { detail: msg },
             _ => Error::Redis(msg),
         }
     }

@@ -8,4 +8,4 @@ pub mod uri;
 pub use manager::ConnManager;
 
 #[cfg(test)]
-mod testutil;
+pub(crate) mod testutil;

@@ -33,6 +33,11 @@ flate2 = "1"
 bytes = "1"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 rustls-native-certs = "0.8"
+# app 层:异步消息通道、取消令牌、Arc<dyn Backend>、多语言(rust-i18n 是作者的决定,gpui-component 自己也用它)
+async-channel = "2"
+tokio-util = "0.7"
+async-trait = "0.1"
+rust-i18n = { version = "4", features = ["load-path"] }
 tempfile = "3"
 
 # 磁盘(AGENTS.md「环境和磁盘」):不要增量编译缓存;调试信息只留行号,依赖不带调试信息

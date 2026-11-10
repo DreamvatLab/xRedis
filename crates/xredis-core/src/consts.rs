@@ -57,3 +57,6 @@ pub const PASTE_MAX_DECOMPRESSED_BYTES: u64 = 4 * COPY_MAX_TOTAL_BYTES;
 pub const CLIPBOARD_PREFIX: &str = "REDIS:";
 /// 控制台阻塞命令的等待上限。
 pub const CONSOLE_BLOCKING_TIMEOUT_SECS: u64 = 30;
+
+/// 界面语言的默认值。
+pub const DEFAULT_LANGUAGE: &str = "en";

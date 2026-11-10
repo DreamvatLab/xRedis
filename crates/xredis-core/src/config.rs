@@ -125,7 +125,10 @@ pub struct ConnectionDraft {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SaveOutcome {
     pub id: ConnId,
+    /// 英文提示,给日志用。
     pub warnings: Vec<String>,
+    /// 密码没存上时密钥存储的原始报错(界面按它翻译提示,不用上面的英文句子)。
+    pub password_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -142,6 +145,8 @@ pub struct Settings {
     pub window_width: u32,
     pub window_height: u32,
     pub is_maximized: bool,
+    /// 界面语言(语言包的名字,如 `en`、`zh-CN`),默认英文。
+    pub language: String,
 }
 
 impl Default for Settings {
@@ -155,6 +160,7 @@ impl Default for Settings {
             window_width: WINDOW_DEFAULT_WIDTH,
             window_height: WINDOW_DEFAULT_HEIGHT,
             is_maximized: false,
+            language: DEFAULT_LANGUAGE.to_string(),
         }
     }
 }
@@ -281,6 +287,11 @@ impl ConfigStore {
             s.show_key_details = new.show_key_details;
             s.scan_batch = new.scan_batch;
             s.auto_scan_limit = new.auto_scan_limit;
+            s.language = if new.language.trim().is_empty() {
+                DEFAULT_LANGUAGE.to_string()
+            } else {
+                new.language.trim().to_string()
+            };
             Ok(())
         })
     }
@@ -371,13 +382,19 @@ impl ConfigStore {
         };
         // 连接已经落盘,密码没存上不能当成保存失败(界面会重试造成重复连接),作为警告带回
         let mut warnings = Vec::new();
+        let mut password_error = None;
         if let Err(err) = password_result {
+            password_error = Some(err.to_string());
             tracing::warn!("连接 {id} 已保存,但密码写入密钥存储失败: {err}");
             warnings.push(format!(
                 "The connection was saved, but its password could not be stored: {err}"
             ));
         }
-        Ok(SaveOutcome { id, warnings })
+        Ok(SaveOutcome {
+            id,
+            warnings,
+            password_error,
+        })
     }
 
     /// 切库时先写配置(L-03:先写配置再清连接缓存)。
@@ -696,6 +713,7 @@ mod tests {
         let out = store.save_connection(d).unwrap();
         assert_eq!(out.warnings.len(), 1, "{:?}", out.warnings);
         assert!(out.warnings[0].contains("locked"));
+        assert!(out.password_error.as_deref().unwrap().contains("locked"));
         // 连接确实已保存,且只有一条
         assert_eq!(store.connections().len(), 1);
         assert_eq!(store.connection(out.id).unwrap().name, "a");
@@ -709,6 +727,7 @@ mod tests {
         // 没碰密码时没有警告
         let ok = store.save_connection(draft("b")).unwrap();
         assert!(ok.warnings.is_empty());
+        assert!(ok.password_error.is_none());
     }
 
     #[test]
@@ -803,6 +822,30 @@ mod tests {
         assert!(store.save_settings(&s).is_err());
         s.auto_scan_limit = 0;
         store.save_settings(&s).unwrap();
+    }
+
+    /// 语言设置会保存;空串回落到默认英文;旧配置文件没有这个字段时是英文。
+    #[test]
+    fn language_setting_is_saved_and_defaults_to_english() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = open(tmp.path());
+        assert_eq!(store.settings().language, "en");
+        let mut s = Settings {
+            language: "zh-CN".into(),
+            ..Settings::default()
+        };
+        store.save_settings(&s).unwrap();
+        assert_eq!(open(tmp.path()).settings().language, "zh-CN");
+        s.language = "  ".into();
+        store.save_settings(&s).unwrap();
+        assert_eq!(store.settings().language, "en");
+        // 旧文件没有 language 字段
+        fs::write(
+            tmp.path().join("config.json"),
+            r#"{"settings":{"show_key_details":false}}"#,
+        )
+        .unwrap();
+        assert_eq!(open(tmp.path()).settings().language, "en");
     }
 
     #[test]

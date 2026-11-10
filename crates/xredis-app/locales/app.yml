@@ -1,0 +1,319 @@
+_version: 2
+
+# 所有界面文字的 key 和英文都在这一个文件里(docs/01「多语言」)。xredis-gpui 不建自己的语言文件。
+# 语言包格式:key 下按语言列翻译。用户的语言包放在配置目录的 locales/ 下,格式相同。
+# 值里的 %{name} 是参数。
+
+# ---- 菜单 ----
+menu.file:
+  en: "File"
+menu.settings:
+  en: "Settings"
+menu.help:
+  en: "Help"
+menu.agreement:
+  en: "Agreement"
+menu.privacy:
+  en: "Privacy Policy"
+menu.report_bugs:
+  en: "Report Bugs"
+menu.coffee:
+  en: "Buy us a Coffee"
+
+# ---- 通用按钮 ----
+btn.ok:
+  en: "OK"
+btn.save:
+  en: "Save"
+btn.cancel:
+  en: "Cancel"
+btn.close:
+  en: "Close"
+btn.delete:
+  en: "Delete"
+btn.edit:
+  en: "Edit"
+btn.choose:
+  en: "Choose..."
+btn.clear:
+  en: "Clear"
+btn.retry:
+  en: "Retry"
+btn.open_log:
+  en: "Open message log"
+
+# ---- 连接列表和 Tab ----
+conn.new:
+  en: "New connection"
+conn.menu.edit:
+  en: "Edit"
+conn.menu.delete:
+  en: "Delete"
+conn.delete.title:
+  en: "Delete connection"
+conn.delete.body:
+  en: "Delete connection '%{name}'? This cannot be undone."
+conn.sider.collapse:
+  en: "Collapse"
+conn.sider.expand:
+  en: "Expand"
+tab.close:
+  en: "Close tab"
+tab.connecting:
+  en: "Connecting..."
+tab.failed:
+  en: "Connection failed"
+tab.sub.keys:
+  en: "Keys"
+tab.sub.pubsub:
+  en: "Pub/Sub"
+tab.sub.console:
+  en: "Console"
+db.label:
+  en: "Database"
+db.item:
+  en: "db%{index} (%{keys} keys)"
+
+# ---- 连接编辑器 ----
+editor.title:
+  en: "Connection Editor"
+editor.host:
+  en: "Host"
+editor.port:
+  en: "Port"
+editor.username:
+  en: "Username"
+editor.username_hint:
+  en: "Optional"
+editor.password:
+  en: "Password"
+editor.password_hint_keep:
+  en: "Leave blank to keep the existing password unchanged."
+editor.password_unchanged:
+  en: "Unchanged"
+editor.password_clear:
+  en: "Remove the saved password"
+editor.name:
+  en: "Name"
+editor.ordinal:
+  en: "Ordinal"
+editor.tls:
+  en: "TLS"
+editor.ca_cert:
+  en: "CA Cert."
+editor.ca_cert_hint:
+  en: "Optional. When empty, the system root certificates are used."
+editor.client_cert:
+  en: "Client Cert."
+editor.client_key:
+  en: "Client Key"
+editor.client_key_hint:
+  en: "Key has a password? Decrypt it first: openssl pkcs8 -topk8 -nocrypt -in client.key -out decrypted.key"
+
+# ---- 表单校验 ----
+validation.host_required:
+  en: "Host is required."
+validation.port_range:
+  en: "Port must be a number between 1 and 65535."
+validation.ordinal_range:
+  en: "Ordinal must be a number between %{min} and %{max}."
+validation.cert_pair:
+  en: "The client certificate and the client key must be provided together."
+validation.batch_range:
+  en: "Batch size must be between %{min} and %{max}."
+validation.auto_scan_range:
+  en: "Auto-scan limit must be between 0 and %{max}."
+
+# ---- 设置 ----
+settings.title:
+  en: "Settings"
+settings.batch:
+  en: "Scan batch size"
+settings.auto_scan:
+  en: "Auto-scan limit (0 turns it off)"
+settings.show_details:
+  en: "Show key details"
+settings.language:
+  en: "Language"
+settings.export_template:
+  en: "Export language pack template"
+settings.template_saved:
+  en: "Language pack template saved to %{path}."
+settings.template_failed:
+  en: "Could not save the language pack template: %{reason}"
+
+# ---- 消息栏 ----
+msgbar.title:
+  en: "Messages"
+msgbar.empty:
+  en: "No messages."
+msgbar.clear:
+  en: "Clear"
+msg.connection_saved:
+  en: "Connection saved."
+msg.connection_deleted:
+  en: "Connection deleted."
+msg.settings_saved:
+  en: "Settings saved."
+msg.password_not_saved:
+  en: "The connection was saved, but its password could not be stored: %{reason}"
+msg.keystore_degraded:
+  en: "The system key store is not available. Passwords are kept in memory only and will be lost when the app exits."
+msg.config_warning:
+  en: "%{warning}"
+msg.import_done:
+  en: "Imported %{count} connection(s) from xRedis v1."
+msg.import_failed:
+  en: "Importing from xRedis v1 failed: %{reason}"
+msg.import_warning:
+  en: "%{warning}"
+msg.pack_loaded:
+  en: "Language pack %{file} loaded (%{languages})."
+msg.pack_error:
+  en: "Language pack %{file} was skipped: %{reason}"
+msg.language_unavailable:
+  en: "Language '%{language}' is not available, using English."
+msg.open_url_failed:
+  en: "Could not open %{url}."
+msg.window_save_failed:
+  en: "Could not save the window size: %{reason}"
+
+# ---- 免责协议 ----
+disclaimer.title:
+  en: "Software Use Disclaimer Agreement"
+disclaimer.agree:
+  en: "I Agree"
+disclaimer.decline:
+  en: "Decline"
+disclaimer.decline_tip:
+  en: "This will close the software and exit the program."
+disclaimer.p0_title:
+  en: "IMPORTANT - READ CAREFULLY:"
+disclaimer.p0:
+  en: "This Software Use Disclaimer Agreement (\"Agreement\") is a legal agreement between you (\"User\") and Dreamvat Inc. (\"Company\") for the use of the software product(s) (\"Software\") provided by Company. By installing, copying, or otherwise using the Software, you agree to be bound by the terms of this Agreement. If you do not agree to the terms of this Agreement, do not install or use the Software."
+disclaimer.p1_title:
+  en: "1. DISCLAIMER OF WARRANTIES"
+disclaimer.p1:
+  en: "The Software is provided \"AS IS\" and \"AS AVAILABLE\" without warranty of any kind. To the maximum extent permitted by applicable law, Company expressly disclaims all warranties and conditions, whether express, implied, or statutory, including, but not limited to, the implied warranties or conditions of merchantability, fitness for a particular purpose, and non-infringement. Company does not warrant that the Software will meet your requirements or that the operation of the Software will be uninterrupted or error-free."
+disclaimer.p2_title:
+  en: "2. LIMITATION OF LIABILITY"
+disclaimer.p2:
+  en: "To the maximum extent permitted by applicable law, in no event shall Company be liable for any special, incidental, indirect, or consequential damages whatsoever (including, but not limited to, damages for loss of profits, loss of data, business interruption, or any other commercial damages or losses) arising out of or related to your use or inability to use the Software, however caused, regardless of the theory of liability (contract, tort, or otherwise) and even if Company has been advised of the possibility of such damages."
+disclaimer.p3_title:
+  en: "3. INDEMNIFICATION"
+disclaimer.p3:
+  en: "You agree to indemnify, defend, and hold harmless Company, its affiliates, officers, directors, employees, agents, and licensors from and against any and all claims, liabilities, damages, losses, costs, expenses, fees (including reasonable attorneys' fees) that they may incur as a result of or arising from your use of the Software or your violation of this Agreement."
+disclaimer.p4_title:
+  en: "4. GOVERNING LAW"
+disclaimer.p4:
+  en: "This Agreement shall be governed by and construed in accordance with the substantive laws of any jurisdiction where the Software is used, excluding its conflict of law principles. Any legal action or proceeding arising under this Agreement will be brought in the courts located in the respective jurisdiction where the Software is used, and the parties hereby irrevocably consent to the personal jurisdiction and venue therein."
+disclaimer.p5_title:
+  en: "5. ENTIRE AGREEMENT"
+disclaimer.p5:
+  en: "This Agreement constitutes the entire agreement between you and Company concerning the subject matter hereof and supersedes all prior and contemporaneous negotiations and agreements, whether oral or written, between the parties with respect to the subject matter hereof."
+disclaimer.p6_title:
+  en: "6. ACCEPTANCE"
+disclaimer.p6:
+  en: "By clicking \"I Agree\" or by installing, copying, or otherwise using the Software, you acknowledge that you have read this Agreement, understand it, and agree to be bound by its terms and conditions. If you do not agree to these terms, you may not install or use the Software."
+disclaimer.signature:
+  en: "Dreamvat Inc."
+
+# ---- 隐私政策 ----
+privacy.title:
+  en: "Privacy Policy"
+privacy.intro_title:
+  en: "Introduction"
+privacy.intro:
+  en: "Thank you for choosing to use our software. We value your privacy and are committed to protecting your personal information. This Privacy Policy aims to explain how we handle your data."
+privacy.data_title:
+  en: "Data Collection and Use"
+privacy.data:
+  en: "Our software does not collect, store, or transmit any personal data. All data processed by the software remains on your local device and is not shared with any external servers or third parties."
+privacy.storage_title:
+  en: "Local Storage"
+privacy.storage:
+  en: "Any information you input or generate while using the software is stored locally on your device. We do not have access to this data and it is solely under your control."
+privacy.security_title:
+  en: "Security"
+privacy.security:
+  en: "We take the security of your data seriously and implement appropriate measures to protect it. Since all data is stored locally, it is crucial that you also take steps to secure your device."
+privacy.updates_title:
+  en: "Updates to this Policy"
+privacy.updates:
+  en: "We may update this Privacy Policy from time to time. Any changes will be posted within the software and will be effective immediately upon posting."
+privacy.contact_title:
+  en: "Contact Us"
+privacy.contact:
+  en: "If you have any questions or concerns about this Privacy Policy, please contact us at [cs@dreamvat.com]."
+
+# ---- 错误(core 的错误按种类翻译;名字等参数原样带出) ----
+err.title:
+  en: "Error"
+err.config:
+  en: "Configuration error: %{detail}"
+err.io:
+  en: "Failed to %{action} %{path}: %{detail}"
+err.keystore:
+  en: "Key store error: %{detail}"
+err.rule:
+  en: "%{detail}"
+err.not_found:
+  en: "Not found: %{detail}"
+err.import:
+  en: "Import failed: %{detail}"
+err.connect:
+  en: "Could not connect: %{detail}"
+err.auth:
+  en: "Authentication failed: %{detail}"
+err.timeout:
+  en: "The operation timed out: %{detail}"
+err.closed:
+  en: "The connection was closed."
+err.redis:
+  en: "Redis error: %{detail}"
+err.already_exists.key:
+  en: "Key '%{name}' already exists."
+err.already_exists.hash_field:
+  en: "Field '%{name}' already exists in hash '%{container}'."
+err.already_exists.set_member:
+  en: "Member '%{name}' already exists in set '%{container}'."
+err.already_exists.zset_member:
+  en: "Member '%{name}' already exists in sorted set '%{container}'."
+err.missing.key:
+  en: "Key '%{name}' does not exist."
+err.missing.hash_field:
+  en: "Field '%{name}' does not exist in hash '%{container}'."
+err.missing.set_member:
+  en: "Member '%{name}' does not exist in set '%{container}'."
+err.missing.zset_member:
+  en: "Member '%{name}' does not exist in sorted set '%{container}'."
+err.ttl_zero:
+  en: "A TTL of 0 would delete the key immediately. Use a positive number of seconds, or -1 to remove the expiry."
+err.ttl_range:
+  en: "TTL %{value} is not allowed. Use -1 to remove the expiry, or a number of seconds from 1 to %{max}."
+err.list_index_invalid:
+  en: "List index %{index} must be between 0 and %{max}."
+err.list_index_range:
+  en: "List index %{index} is out of range (the list has %{len} elements)."
+err.score_nan:
+  en: "The score must be a number."
+err.copy_too_large:
+  en: "Too much data to copy: reached %{total} at key '%{key}' after %{copied} key(s); the limit is %{limit}. Select fewer keys."
+err.nothing_copied:
+  en: "Nothing was copied. %{skipped} key(s) were skipped."
+err.clipboard_not_redis:
+  en: "The clipboard does not contain Redis data."
+err.clipboard_corrupt:
+  en: "The clipboard data is damaged (%{stage}): %{detail}"
+err.paste_too_large:
+  en: "The clipboard data expands beyond the paste limit of %{limit}."
+err.paste_conflicts:
+  en: "%{count} of %{total} key(s) already exist and were not overwritten: %{keys}"
+err.restore_failed:
+  en: "Failed to restore key '%{key}': %{detail}"
+err.command_syntax:
+  en: "Invalid command syntax: %{detail}"
+err.command_rejected:
+  en: "'%{command}' would put the connection into a special mode and is not allowed in the console. Use the Pub/Sub page for subscriptions."
+err.blocking_timeout:
+  en: "'%{command}' timed out after %{secs}s. Use a shorter timeout argument instead of 0."

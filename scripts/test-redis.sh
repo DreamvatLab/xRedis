@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# 测试用 Redis 容器:start | start-tls | stop | test [cargo 参数]
+# 测试用 Redis 容器:start | start-tls | stop | test [cargo 参数] | test-old
 #
 # - xredis-test-redis       127.0.0.1:6391  普通连接,带密码,--databases 20
 # - xredis-test-redis-tls   127.0.0.1:6392  只开 TLS,要求客户端证书(tls-auth-clients yes)
+# - xredis-test-redis5      127.0.0.1:6393  redis:5,只在 test-old 里临时起,测完删掉(验证旧版 Redis 的回退)
 #
 # 只动这两个容器,不碰其他 Redis。TLS 证书用 openssl 现生成到 target/test-tls(git 忽略,不提交)。
 set -euo pipefail
@@ -21,6 +22,9 @@ IMAGE="redis:8"
 PASSWORD="${XREDIS_TEST_REDIS_PASSWORD:-xredis-test-pw}"
 TEST_TIMEOUT="${XREDIS_TEST_TIMEOUT:-900}"
 TLS_DIR="${XREDIS_TEST_TLS_DIR:-$ROOT/target/test-tls}"
+OLD_NAME="xredis-test-redis5"
+OLD_PORT="6393"
+OLD_IMAGE="redis:5"
 
 # 传给原生程序(docker)的路径:Windows 上要 D:/... 这种形式
 native_path() {
@@ -123,10 +127,30 @@ case "${1:-}" in
     # 测试程序是原生进程,路径要用它认得的形式(Windows 上是 D:/...)
     export XREDIS_TEST_TLS_DIR="$(native_path "$TLS_DIR")"
     # keyring_manual 会碰真实的系统钥匙串,只手动跑,这里跳过
-    timeout "$TEST_TIMEOUT" cargo test "$@" -- --ignored --skip keyring_manual
+    # 不捕获输出:测试里的诊断 WARNING 要能在日志里看到
+    export RUST_TEST_NOCAPTURE=1
+    # 旧版 Redis 的测试只在 test-old 里跑
+    timeout "$TEST_TIMEOUT" cargo test "$@" -- --ignored --skip keyring_manual --skip old_redis
+    ;;
+  test-old)
+    shift
+    docker rm -f "$OLD_NAME" >/dev/null 2>&1 || true
+    # 不管测试怎么结束,都把临时容器删掉
+    trap 'docker rm -f "$OLD_NAME" >/dev/null 2>&1 || true' EXIT
+    docker run -d --name "$OLD_NAME" -p "127.0.0.1:${OLD_PORT}:6379" "$OLD_IMAGE" \
+      redis-server --requirepass "$PASSWORD" --save "" --appendonly no >/dev/null
+    for _ in $(seq 1 30); do
+      if docker exec "$OLD_NAME" redis-cli -a "$PASSWORD" --no-auth-warning ping 2>/dev/null | grep -q PONG; then
+        break
+      fi
+      sleep 1
+    done
+    # redis:5 没有 ACL,不认 AUTH 用户名 密码,只带密码
+    export XREDIS_TEST_OLD_REDIS_URL="redis://:${PASSWORD}@127.0.0.1:${OLD_PORT}"
+    timeout "$TEST_TIMEOUT" cargo test -p xredis-core old_redis "$@" -- --ignored
     ;;
   *)
-    echo "usage: $0 start|start-tls|stop|test [cargo args]" >&2
+    echo "usage: $0 start|start-tls|stop|test [cargo args]|test-old" >&2
     exit 2
     ;;
 esac

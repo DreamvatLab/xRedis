@@ -5,7 +5,7 @@ use fred::clients::Pool;
 use fred::interfaces::ClientLike;
 use fred::types::Value;
 
-use super::already_exists;
+use super::{already_exists, transaction};
 use crate::consts::{LARGE_VALUE_PREVIEW, LARGE_VALUE_THRESHOLD};
 use crate::error::{Entity, Result};
 use crate::value::*;
@@ -62,11 +62,53 @@ pub async fn set(pool: &Pool, key: &[u8], value: &[u8], mode: SetMode) -> Result
     match mode {
         SetMode::Create => args.push(arg_str("NX")),
         SetMode::Overwrite => {}
-        SetMode::KeepTtl => args.push(arg_str("KEEPTTL")),
+        SetMode::KeepTtl => return set_keep_ttl(pool, key, value).await,
     }
     let reply: Value = pool.custom(command("SET"), args).await?;
     if mode == SetMode::Create && reply.is_null() {
         return Err(already_exists(Entity::Key, key, None));
     }
     Ok(())
+}
+
+/// 保留 TTL 的覆盖。Redis 6.0 以上用 `SET KEEPTTL`(原子);更老的服务器不认这个参数,
+/// 返回语法错误,这时回退到 [`set_keep_ttl_fallback`]。
+async fn set_keep_ttl(pool: &Pool, key: &[u8], value: &[u8]) -> Result<()> {
+    let reply: std::result::Result<Value, _> = pool
+        .custom(
+            command("SET"),
+            vec![arg(key), arg(value), arg_str("KEEPTTL")],
+        )
+        .await;
+    match reply {
+        Ok(_) => Ok(()),
+        Err(err) if err.details().to_lowercase().contains("syntax error") => {
+            tracing::debug!("服务器不支持 SET KEEPTTL,回退到 PTTL 加 SET 加 PEXPIRE");
+            set_keep_ttl_fallback(pool, key, value).await
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+/// 旧版 Redis 的回退:先 `PTTL` 取剩余时间,有 TTL 就在事务里 `SET` 加 `PEXPIRE`。
+/// PTTL 和事务之间不是原子的,会有一点时间误差(取到 PTTL 到事务执行之间流逝的时间),
+/// 这期间别人改了这个 key 的 TTL 也会被我们覆盖,v2.0 接受。没有 TTL(-1)或 key 不存在(-2)
+/// 就是普通的 `SET`(新建的 key 没有 TTL,和 `KEEPTTL` 的行为一致)。
+pub(crate) async fn set_keep_ttl_fallback(pool: &Pool, key: &[u8], value: &[u8]) -> Result<()> {
+    let pttl: i64 = pool.custom(command("PTTL"), vec![arg(key)]).await?;
+    if pttl > 0 {
+        transaction(
+            pool,
+            vec![
+                ("SET", vec![arg(key), arg(value)]),
+                ("PEXPIRE", vec![arg(key), arg_int(pttl)]),
+            ],
+        )
+        .await
+    } else {
+        let _: Value = pool
+            .custom(command("SET"), vec![arg(key), arg(value)])
+            .await?;
+        Ok(())
+    }
 }

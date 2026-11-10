@@ -893,3 +893,124 @@ async fn wrong_type_is_a_redis_error_and_changes_nothing() {
     })
     .await;
 }
+
+// ---------------------------------------------------------------------------
+// R-04a:KeepTtl 在旧版 Redis 上的回退
+// ---------------------------------------------------------------------------
+
+/// 强制走回退分支(对 8.0 服务器):有 TTL 的保留(有一点时间误差),没有 TTL 的仍然没有,
+/// 不存在的 key 被创建且没有 TTL。
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs redis"]
+async fn keepttl_fallback_branch_preserves_ttl() {
+    run(|fx| async move {
+        let k = fx.key("ttl");
+        string::set(&fx.pool, &k, b"one", SetMode::Overwrite)
+            .await
+            .unwrap();
+        keys::set_ttl(&fx.pool, &k, 100).await.unwrap();
+        string::set_keep_ttl_fallback(&fx.pool, &k, b"two")
+            .await
+            .unwrap();
+        assert_eq!(
+            string::get(&fx.pool, &k).await.unwrap().unwrap().data,
+            b("two")
+        );
+        match keys::key_ttl(&fx.pool, &k).await.unwrap() {
+            Ttl::Seconds(n) => assert!((95..=100).contains(&n), "ttl drifted to {n}"),
+            other => panic!("TTL was lost: {other:?}"),
+        }
+
+        let plain = fx.key("plain");
+        string::set(&fx.pool, &plain, b"a", SetMode::Overwrite)
+            .await
+            .unwrap();
+        string::set_keep_ttl_fallback(&fx.pool, &plain, b"b")
+            .await
+            .unwrap();
+        assert_eq!(
+            keys::key_ttl(&fx.pool, &plain).await.unwrap(),
+            Ttl::Persistent
+        );
+
+        let fresh = fx.key("fresh");
+        string::set_keep_ttl_fallback(&fx.pool, &fresh, b"c")
+            .await
+            .unwrap();
+        assert_eq!(
+            string::get(&fx.pool, &fresh).await.unwrap().unwrap().data,
+            b("c")
+        );
+        assert_eq!(
+            keys::key_ttl(&fx.pool, &fresh).await.unwrap(),
+            Ttl::Persistent
+        );
+    })
+    .await;
+}
+
+/// 真正的旧版服务器(`redis:5`,`scripts/test-redis.sh test-old` 起的临时容器,127.0.0.1:6393):
+/// `SET KEEPTTL` 会返回语法错误,`SetMode::KeepTtl` 要自动回退并保住 TTL。
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs old redis (scripts/test-redis.sh test-old)"]
+async fn old_redis_keepttl_falls_back_automatically() {
+    let _g = CONTAINER_LOCK.read().await;
+    with_timeout(60, async {
+        let c = old_redis_creds();
+        let env = TestEnv::with(
+            &c.host,
+            c.port,
+            c.username.as_deref(),
+            c.password.as_deref(),
+        );
+        let pool = env.manager.pool(env.id).await.unwrap();
+        // 确认真的连到了旧版服务器,而不是 8.0
+        let info: String = pool
+            .custom(command("INFO"), vec![arg(b"server")])
+            .await
+            .unwrap();
+        let version = info
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("redis_version:"))
+            .expect("redis_version")
+            .to_string();
+        assert!(
+            version.starts_with("5."),
+            "expected a 5.x server, got {version}"
+        );
+        // 旧版确实不认 KEEPTTL(这条证明回退不是白做)
+        let raw: std::result::Result<fred::types::Value, _> = pool
+            .custom(
+                command("SET"),
+                vec![arg(b"xredis_test:probe"), arg(b"v"), arg(b"KEEPTTL")],
+            )
+            .await;
+        assert!(
+            raw.as_ref()
+                .err()
+                .is_some_and(|e| e.details().to_lowercase().contains("syntax error")),
+            "a {version} server should reject KEEPTTL with a syntax error: {raw:?}"
+        );
+
+        let prefix = unique_prefix();
+        let k = format!("{prefix}k").into_bytes();
+        string::set(&pool, &k, b"one", SetMode::Overwrite)
+            .await
+            .unwrap();
+        keys::set_ttl(&pool, &k, 100).await.unwrap();
+        string::set(&pool, &k, b"two", SetMode::KeepTtl)
+            .await
+            .unwrap();
+        assert_eq!(
+            string::get(&pool, &k).await.unwrap().unwrap().data,
+            b("two")
+        );
+        match keys::key_ttl(&pool, &k).await.unwrap() {
+            Ttl::Seconds(n) => assert!((95..=100).contains(&n), "ttl drifted to {n}"),
+            other => panic!("TTL was lost on {version}: {other:?}"),
+        }
+        keys::delete_keys(&pool, &[Bytes::from(k)]).await.unwrap();
+        env.manager.close(env.id).await.unwrap();
+    })
+    .await;
+}

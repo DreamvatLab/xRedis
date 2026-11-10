@@ -47,6 +47,14 @@ pub(crate) fn test_redis_creds() -> Creds {
     parse_url(&url)
 }
 
+/// 旧版 Redis(`scripts/test-redis.sh test-old` 起的 `redis:5` 临时容器)的凭据。
+pub(crate) fn old_redis_creds() -> Creds {
+    let url = std::env::var("XREDIS_TEST_OLD_REDIS_URL").expect(
+        "XREDIS_TEST_OLD_REDIS_URL is not set; run this test with scripts/test-redis.sh test-old",
+    );
+    parse_url(&url)
+}
+
 fn parse_url(url: &str) -> Creds {
     let rest = url.strip_prefix("redis://").expect("redis:// url");
     let (auth, hostport) = match rest.rsplit_once('@') {

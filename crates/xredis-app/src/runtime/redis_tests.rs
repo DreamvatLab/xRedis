@@ -132,3 +132,117 @@ async fn core_backend_key_operations_against_a_real_redis() {
     backend.close_connection(id).await.unwrap();
     result
 }
+
+/// R-07c:控制台和 Pub/Sub 的接线对着真实 Redis 测一遍:命令分词后的字节原样到服务端、输出格式、
+/// 被拒绝的命令、订阅后发布能收到(带连接 id、二进制载荷原样)、退订后收不到、关连接后监听结束。
+/// 频道名和 key 用唯一前缀,不碰别的东西。
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs redis"]
+async fn core_backend_console_and_pubsub_against_a_real_redis() {
+    use std::sync::Mutex;
+    use xredis_core::console::split;
+    use xredis_core::pubsub::PubsubMessage;
+
+    let (host, port, password) = test_redis();
+    let tmp = tempfile::tempdir().unwrap();
+    let backend = CoreBackend::open(tmp.path().to_path_buf(), Arc::new(MemoryStore::new()), None)
+        .expect("open backend");
+    let received: Arc<Mutex<Vec<PubsubMessage>>> = Default::default();
+    {
+        let received = received.clone();
+        backend.set_message_sink(Arc::new(move |m| received.lock().unwrap().push(m)));
+    }
+    let id = backend
+        .save_connection(ConnectionDraft {
+            id: None,
+            name: "test".into(),
+            host,
+            port,
+            ordinal: 0,
+            username: None,
+            tls: None,
+            password: password.map_or(PasswordChange::Keep, PasswordChange::Set),
+        })
+        .await
+        .unwrap()
+        .outcome
+        .id;
+
+    let prefix = format!("xredis_test:{}:", ConnId::new());
+    let run = |line: String| {
+        let backend = &backend;
+        async move { backend.run_command(id, split(&line).unwrap()).await }
+    };
+
+    let result = async {
+        // 控制台:带空格的参数整体到服务端;输出是 redis-cli 的样子
+        // 状态回复(OK、PONG)也带引号:fred 把简单字符串和批量字符串都变成 Value::String,
+        // 分不出来,和 redis-cli(OK 不带引号)有差别,记在第 32 节
+        assert_eq!(
+            run(format!(r#"SET {prefix}k "hello world""#))
+                .await
+                .unwrap(),
+            "\"OK\""
+        );
+        assert_eq!(
+            run(format!("GET {prefix}k")).await.unwrap(),
+            "\"hello world\""
+        );
+        assert_eq!(run(format!("GET {prefix}missing")).await.unwrap(), "(nil)");
+        assert!(run(format!("DEL {prefix}k")).await.unwrap().contains('1'));
+        // 被拒绝的命令不会发出去,控制台客户端还能用
+        let rejected = run("SUBSCRIBE a".into()).await.unwrap_err();
+        assert!(
+            matches!(rejected, Error::CommandRejected { .. }),
+            "{rejected:?}"
+        );
+        assert_eq!(run("PING".into()).await.unwrap(), "\"PONG\"");
+
+        // Pub/Sub
+        let chan = Bytes::from(format!("{prefix}chan"));
+        backend.subscribe(id, chan.clone()).await.unwrap();
+        let listed = backend.channels(id).await.unwrap();
+        assert!(
+            listed.contains(&chan),
+            "the subscription is visible: {listed:?}"
+        );
+        let n = backend
+            .publish(
+                id,
+                chan.clone(),
+                Bytes::from_static(&[b'a', 0xff, b'\n', b'b']),
+            )
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "one subscriber");
+        for _ in 0..50 {
+            if !received.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        {
+            let got = received.lock().unwrap();
+            assert_eq!(got.len(), 1, "delivered exactly once: {got:?}");
+            assert_eq!(got[0].conn, id, "tagged with the connection");
+            assert_eq!(got[0].channel, chan);
+            assert_eq!(
+                &got[0].payload[..],
+                &[b'a', 0xff, b'\n', b'b'],
+                "binary payload is intact"
+            );
+        }
+
+        backend.unsubscribe(id, chan.clone()).await.unwrap();
+        let n = backend
+            .publish(id, chan.clone(), Bytes::from_static(b"nobody"))
+            .await
+            .unwrap();
+        assert_eq!(n, 0, "no subscribers after the unsubscribe");
+        assert!(!backend.channels(id).await.unwrap().contains(&chan));
+    }
+    .await;
+
+    backend.close_connection(id).await.unwrap();
+    result
+}

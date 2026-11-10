@@ -207,6 +207,15 @@ pub enum Msg {
         id: ConnId,
         msg: KeysMsg,
     },
+    // ---- 控制台和 Pub/Sub(R-07c) ----
+    Console {
+        id: ConnId,
+        msg: crate::console::ConsoleMsg,
+    },
+    PubSub {
+        id: ConnId,
+        msg: crate::pubsub_view::PubSubMsg,
+    },
     // ---- 打开的 key(R-07b):值编辑器、成员表、新建 key、改名和改 TTL ----
     View {
         id: ConnId,
@@ -272,6 +281,34 @@ pub enum BackendCmd {
         id: ConnId,
         text: String,
     },
+    // ---- 控制台和 Pub/Sub(R-07c)。`generation` 是连接纪元,连接重建后旧结果丢弃 ----
+    /// 执行一行已经分好词的命令,结果是格式化好的文本。
+    RunCommand {
+        id: ConnId,
+        generation: u64,
+        tokens: Vec<Vec<u8>>,
+    },
+    PubSubSubscribe {
+        id: ConnId,
+        generation: u64,
+        channel: Bytes,
+    },
+    PubSubUnsubscribe {
+        id: ConnId,
+        generation: u64,
+        channel: Bytes,
+    },
+    PubSubPublish {
+        id: ConnId,
+        generation: u64,
+        channel: Bytes,
+        message: Bytes,
+    },
+    PubSubChannels {
+        id: ConnId,
+        generation: u64,
+    },
+
     // ---- 打开的 key(R-07b)。`generation` 是视图代号,结果带着它回来 ----
     /// 取 key 的类型、长度、TTL(视图用)。
     ViewDetails {

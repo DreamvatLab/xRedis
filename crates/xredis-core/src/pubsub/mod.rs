@@ -27,6 +27,8 @@ use crate::value::{arg, command, value_to_bytes};
 /// 收到的一条消息。频道名和内容都是字节(二进制消息界面有损显示)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PubsubMessage {
+    /// 哪个连接收到的(多个 Tab 共用一个出口,靠它分流)。
+    pub conn: ConnId,
     pub channel: Bytes,
     pub payload: Bytes,
     /// 收到的时间(毫秒,UTC),界面显示时间戳用。
@@ -75,7 +77,7 @@ impl Pubsub {
             .subscriber_client(id, |client: &Client| {
                 self.registered
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                handle = Some(spawn_listener(client, sink));
+                handle = Some(spawn_listener(client, sink, id));
             })
             .await?;
         if let Some(h) = handle {
@@ -191,12 +193,13 @@ fn now_ms() -> i64 {
 }
 
 /// 在订阅客户端上挂监听任务,把消息交给 `sink`。**只能在客户端新建时调用一次。**
-fn spawn_listener(client: &Client, sink: Arc<dyn MessageSink>) -> JoinHandle<()> {
+fn spawn_listener(client: &Client, sink: Arc<dyn MessageSink>, conn: ConnId) -> JoinHandle<()> {
     let mut rx = client.message_rx();
     tokio::spawn(async move {
         // 广播通道在客户端 quit 时关闭,recv 返回 Err,任务结束
         while let Ok(msg) = rx.recv().await {
             sink.deliver(PubsubMessage {
+                conn,
                 channel: Bytes::copy_from_slice(msg.channel.as_bytes()),
                 payload: value_to_bytes(msg.value),
                 at_ms: now_ms(),

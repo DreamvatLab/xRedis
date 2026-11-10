@@ -15,6 +15,7 @@ use xredis_core::conn::info::ConnectionInfo;
 use xredis_core::keys::{KeyDetails, KeyType, ScanPage};
 use xredis_core::keystore::{FallbackStore, KeyStore, KeyringStore};
 use xredis_core::members::{ApplyFailure, MemberPage, WriteOp};
+use xredis_core::pubsub::{Pubsub, PubsubMessage};
 use xredis_core::transfer::{CopyOutcome, PasteOutcome, PastePreview};
 use xredis_core::types::string::StringValue;
 use xredis_core::v1_import::{import_v1_if_first_run, v1_config_path};
@@ -34,6 +35,18 @@ pub trait Backend: Send + Sync + 'static {
     async fn select_db(&self, id: ConnId, db: u32) -> Result<()>;
     async fn save_settings(&self, settings: Settings) -> Result<()>;
     async fn save_window_size(&self, width: u32, height: u32, maximized: bool) -> Result<()>;
+
+    // ---- 控制台和 Pub/Sub(R-07c)----
+    /// 执行一行已经分好词的命令(控制台客户端),返回 redis-cli 风格的输出文本。
+    async fn run_command(&self, id: ConnId, tokens: Vec<Vec<u8>>) -> Result<String>;
+    async fn subscribe(&self, id: ConnId, channel: Bytes) -> Result<()>;
+    async fn unsubscribe(&self, id: ConnId, channel: Bytes) -> Result<()>;
+    /// 发布,返回收到消息的订阅者数量。
+    async fn publish(&self, id: ConnId, channel: Bytes, message: Bytes) -> Result<u64>;
+    /// `PUBSUB CHANNELS`。
+    async fn channels(&self, id: ConnId) -> Result<Vec<Bytes>>;
+    /// 订阅收到的消息交给谁。`Runtime` 创建时设置一次。
+    fn set_message_sink(&self, sink: Arc<dyn Fn(PubsubMessage) + Send + Sync>);
 
     // ---- key 操作(R-07a)----
     /// 扫一批 key。`pattern` 为 `*` 时不带 MATCH。
@@ -81,9 +94,16 @@ pub struct CoreBackend {
     v1_path: Option<PathBuf>,
     /// 打开配置时的警告(改用了临时目录、坏文件已备份),在 `startup` 里带给界面。
     open_warnings: Vec<StartupWarning>,
+    /// Pub/Sub 管理,`set_message_sink` 时创建(消息出口要等 `Runtime` 建好才有)。
+    pubsub: std::sync::OnceLock<Pubsub>,
 }
 
 impl CoreBackend {
+    /// Pub/Sub 管理。`Runtime::new` 一创建就设置了消息出口,没设置说明没经过 Runtime(不应发生)。
+    fn pubsub_ref(&self) -> Result<&Pubsub> {
+        self.pubsub.get().ok_or(xredis_core::Error::Closed)
+    }
+
     /// 生产环境:默认配置目录,系统钥匙串(不可用时降级到内存,界面提示一次),
     /// 第一次启动时从 v1 导入。
     pub fn production() -> Result<Self> {
@@ -125,6 +145,7 @@ impl CoreBackend {
             config_dir: dir,
             v1_path,
             open_warnings,
+            pubsub: Default::default(),
         })
     }
 
@@ -214,10 +235,17 @@ impl Backend for CoreBackend {
     }
 
     async fn close_connection(&self, id: ConnId) -> Result<()> {
+        // 先结束监听任务,再关连接
+        if let Some(p) = self.pubsub.get() {
+            p.connection_closed(id);
+        }
         self.manager.close(id).await
     }
 
     async fn select_db(&self, id: ConnId, db: u32) -> Result<()> {
+        if let Some(p) = self.pubsub.get() {
+            p.connection_closed(id);
+        }
         self.manager.select_db(id, db).await
     }
 
@@ -260,6 +288,38 @@ impl Backend for CoreBackend {
     async fn copy_keys(&self, id: ConnId, keys: Vec<Bytes>) -> Result<CopyOutcome> {
         let pool = self.manager.pool(id).await?;
         xredis_core::transfer::copy_keys(&pool, &keys).await
+    }
+
+    async fn run_command(&self, id: ConnId, tokens: Vec<Vec<u8>>) -> Result<String> {
+        let client = self.manager.console_client(id).await?;
+        match xredis_core::console::run_command(&client, &tokens).await? {
+            Some(value) => Ok(xredis_core::console::format_output(&value)),
+            None => Ok(String::new()),
+        }
+    }
+
+    async fn subscribe(&self, id: ConnId, channel: Bytes) -> Result<()> {
+        self.pubsub_ref()?.subscribe(id, &channel).await
+    }
+
+    async fn unsubscribe(&self, id: ConnId, channel: Bytes) -> Result<()> {
+        self.pubsub_ref()?.unsubscribe(id, &channel).await
+    }
+
+    async fn publish(&self, id: ConnId, channel: Bytes, message: Bytes) -> Result<u64> {
+        xredis_core::pubsub::publish(&self.manager, id, &channel, &message).await
+    }
+
+    async fn channels(&self, id: ConnId) -> Result<Vec<Bytes>> {
+        xredis_core::pubsub::channels(&self.manager, id).await
+    }
+
+    fn set_message_sink(&self, sink: Arc<dyn Fn(PubsubMessage) + Send + Sync>) {
+        // `Fn(PubsubMessage)` 就是 core 的 `MessageSink`(闭包的泛型实现),包一层转成 trait 对象
+        let _ = self.pubsub.set(Pubsub::new(
+            self.manager.clone(),
+            Arc::new(move |m| sink(m)),
+        ));
     }
 
     async fn read_string(&self, id: ConnId, key: Bytes) -> Result<Option<StringValue>> {

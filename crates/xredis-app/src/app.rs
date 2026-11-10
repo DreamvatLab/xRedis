@@ -15,6 +15,7 @@ use xredis_core::consts::WINDOW_MIN_HEIGHT;
 use xredis_core::consts::WINDOW_MIN_WIDTH;
 use xredis_core::{Error, Result};
 
+use crate::console::{Console, ConsoleMsg};
 use crate::errors::{describe, describe_import_warning, describe_startup_warning};
 use crate::forms::{ConnectionEditor, SettingsEditor};
 use crate::i18n::{export_template, resolve_language, tr, tr_with};
@@ -22,6 +23,7 @@ use crate::keylist::{Ctx as KeysCtx, KeyList, KeysMsg};
 use crate::keyview::{KeyView, ListEffect, ViewMsg};
 use crate::messages::{Level, MessageBar};
 use crate::msg::{BackendCmd, Cmd, Epoch, Msg, PlatformCmd, Saved, StartupData, SubPage};
+use crate::pubsub_view::{PubSubMsg, PubSubView};
 
 /// 免责协议的版本。同意的版本等于它才算同意过(v1 同);协议改版时改这个值,用户会被重新询问。
 pub const AGREEMENT_VERSION: &str = "1.0.0";
@@ -52,6 +54,10 @@ pub struct Tab {
     pub keys: KeyList,
     /// 打开的 key(值编辑器、成员表、新建 key,R-07b),没有就是 `None`。
     pub view: Option<KeyView>,
+    /// 控制台页的状态(R-07c)。
+    pub console: Console,
+    /// Pub/Sub 页的状态(R-07c)。
+    pub pubsub: PubSubView,
     /// 视图代号的计数器,只增不减:换了视图,旧视图的迟到结果对不上就丢弃。
     view_seq: u64,
 }
@@ -270,6 +276,8 @@ impl App {
                 | Msg::ExportLanguageTemplate
         ) || matches!(msg, Msg::Keys { msg, .. } if !msg.is_result())
             || matches!(msg, Msg::View { msg, .. } if !msg.is_result())
+            || matches!(msg, Msg::Console { msg, .. } if !msg.is_result())
+            || matches!(msg, Msg::PubSub { msg, .. } if !msg.is_result())
     }
 
     // ---- update ----
@@ -512,6 +520,8 @@ impl App {
             // ---- Keys 子页 ----
             Msg::Keys { id, msg } => self.on_keys(id, msg),
             Msg::View { id, msg } => self.on_view(id, msg),
+            Msg::Console { id, msg } => self.on_console(id, msg),
+            Msg::PubSub { id, msg } => self.on_pubsub(id, msg),
 
             // ---- 窗口 ----
             Msg::WindowChanged {
@@ -649,6 +659,8 @@ impl App {
             keys: KeyList::new(),
             view: None,
             view_seq: 0,
+            console: Console::new(),
+            pubsub: PubSubView::new(),
         });
         self.active = Some(id);
         vec![Cmd::Backend(BackendCmd::Connect { id, epoch })]
@@ -714,6 +726,10 @@ impl App {
                 self.tabs[idx].keys.reset();
                 // 重连或切库之后,打开着的 key 不一定还在:关掉
                 self.tabs[idx].view = None;
+                // 控制台在执行的命令和 Pub/Sub 的订阅都随旧连接结束,迟到的结果作废
+                self.tabs[idx].console.reset_connection();
+                let now = self.now();
+                self.tabs[idx].pubsub.reset_connection(now, &self.lang);
                 return self.on_keys(id, KeysMsg::Search);
             }
             Err(err) => {
@@ -745,6 +761,46 @@ impl App {
             now,
         };
         let out = self.tabs[idx].keys.update(&ctx, msg);
+        for n in out.notes {
+            self.note(n.level, n.text, n.toast);
+        }
+        out.cmds
+    }
+
+    /// 控制台(R-07c)。用户操作要等 Tab 就绪;结果不挡,在 `Console` 里按连接纪元丢弃迟到的。
+    fn on_console(&mut self, id: ConnId, msg: ConsoleMsg) -> Vec<Cmd> {
+        if !msg.is_result() && !self.can_request(id) {
+            return Vec::new();
+        }
+        let Some(idx) = self.tabs.iter().position(|t| t.id == id) else {
+            return Vec::new();
+        };
+        let now = self.now();
+        let ctx = KeysCtx {
+            id,
+            lang: &self.lang,
+            settings: &self.settings,
+            now,
+        };
+        self.tabs[idx].console.update(&ctx, msg).cmds
+    }
+
+    /// Pub/Sub(R-07c)。同上。收到的消息(`Incoming`)只在订阅着的时候显示。
+    fn on_pubsub(&mut self, id: ConnId, msg: PubSubMsg) -> Vec<Cmd> {
+        if !msg.is_result() && !self.can_request(id) {
+            return Vec::new();
+        }
+        let Some(idx) = self.tabs.iter().position(|t| t.id == id) else {
+            return Vec::new();
+        };
+        let now = self.now();
+        let ctx = KeysCtx {
+            id,
+            lang: &self.lang,
+            settings: &self.settings,
+            now,
+        };
+        let out = self.tabs[idx].pubsub.update(&ctx, msg);
         for n in out.notes {
             self.note(n.level, n.text, n.toast);
         }

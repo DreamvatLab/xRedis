@@ -387,3 +387,21 @@ view.col.value:
   en: "Value"
 view.col.score:
   en: "Score"
+pubsub.channel_required:
+  en: "Channel is required."
+pubsub.message_required:
+  en: "Message is required."
+pubsub.subscribed:
+  en: "Subscribed to channel <%{channel}>"
+pubsub.unsubscribed:
+  en: "Unsubscribed from channel <%{channel}>"
+pubsub.received:
+  en: "Channel <%{channel}> received: \"%{payload}\""
+pubsub.published:
+  en: "Published to channel <%{channel}>, %{count} receiver(s)."
+pubsub.channels_header:
+  en: "##### Existing channels:"
+pubsub.no_channels:
+  en: "(no channels)"
+pubsub.connection_reset:
+  en: "The connection was reset; the subscription to channel <%{channel}> has ended."

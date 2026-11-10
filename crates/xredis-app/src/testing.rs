@@ -14,6 +14,7 @@ use xredis_core::conn::info::{ConnectionInfo, KeyspaceInfo};
 use xredis_core::keys::{KeyDetails, KeyType, ScanPage, Ttl};
 use xredis_core::keystore::MemoryStore;
 use xredis_core::members::{ApplyFailure, Member, MemberOp, MemberPage, NewContent, WriteOp};
+use xredis_core::pubsub::PubsubMessage;
 use xredis_core::transfer::{ClipboardEntry, CopyOutcome, PasteOutcome, PastePreview};
 use xredis_core::types::list::Side;
 use xredis_core::types::string::{SetMode, StringValue};
@@ -46,6 +47,14 @@ struct Control {
     members: HashMap<Bytes, Vec<Member>>,
     /// 成功执行过的写操作。
     applied: Vec<WriteOp>,
+    /// 控制台执行过的命令(分好词的)。
+    commands: Vec<Vec<Vec<u8>>>,
+    /// 订阅收到的消息交给谁(`Runtime::new` 设置)。
+    sink: Option<Arc<dyn Fn(PubsubMessage) + Send + Sync>>,
+    /// 每个连接订阅的频道(同时只订阅一个)。
+    subs: HashMap<ConnId, Bytes>,
+    /// `channels` 返回的频道列表。
+    channel_list: Vec<Bytes>,
 }
 
 pub struct FakeBackend {
@@ -204,6 +213,33 @@ impl FakeBackend {
 
     pub fn key_ttl(&self, key: &[u8]) -> Option<Ttl> {
         self.ctl.lock().unwrap().keyspace.get(key).map(|d| d.ttl)
+    }
+
+    /// 控制台执行过的命令,按顺序。
+    pub fn commands(&self) -> Vec<Vec<Vec<u8>>> {
+        self.ctl.lock().unwrap().commands.clone()
+    }
+
+    pub fn set_channel_list(&self, list: Vec<Bytes>) {
+        self.ctl.lock().unwrap().channel_list = list;
+    }
+
+    /// 这个连接现在订阅的频道。
+    pub fn subscribed_channel(&self, id: ConnId) -> Option<Bytes> {
+        self.ctl.lock().unwrap().subs.get(&id).cloned()
+    }
+
+    /// 模拟服务端推来一条消息(别的客户端发布的)。
+    pub fn emit(&self, conn: ConnId, channel: &[u8], payload: &[u8]) {
+        let sink = self.ctl.lock().unwrap().sink.clone();
+        if let Some(sink) = sink {
+            sink(PubsubMessage {
+                conn,
+                channel: Bytes::copy_from_slice(channel),
+                payload: Bytes::copy_from_slice(payload),
+                at_ms: xredis_core::config::now_ms(),
+            });
+        }
     }
 
     /// 成功执行过的写操作,按顺序。
@@ -427,6 +463,97 @@ impl Backend for FakeBackend {
             copied: entries.len(),
             skipped,
         })
+    }
+
+    async fn run_command(&self, id: ConnId, tokens: Vec<Vec<u8>>) -> Result<String> {
+        let name = String::from_utf8_lossy(tokens.first().map_or(&[][..], |t| t)).to_uppercase();
+        self.enter("run_command", format!("{id}:{name}")).await?;
+        self.ctl.lock().unwrap().commands.push(tokens.clone());
+        // 最小的命令集:够测控制台的流程
+        Ok(match name.as_str() {
+            "PING" => "PONG".to_string(),
+            "BIG" => {
+                // BIG n:n 行输出,测输出行数上限
+                let n: usize = tokens
+                    .get(1)
+                    .and_then(|t| String::from_utf8_lossy(t).parse().ok())
+                    .unwrap_or(1);
+                (1..=n)
+                    .map(|i| format!("{i}) line {i}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+            _ => format!(
+                "OK {}",
+                tokens
+                    .iter()
+                    .skip(1)
+                    .map(|t| String::from_utf8_lossy(t).into_owned())
+                    .collect::<Vec<_>>()
+                    .join("|")
+            ),
+        })
+    }
+
+    async fn subscribe(&self, id: ConnId, channel: Bytes) -> Result<()> {
+        self.enter(
+            "subscribe",
+            format!("{id}:{}", String::from_utf8_lossy(&channel)),
+        )
+        .await?;
+        self.ctl.lock().unwrap().subs.insert(id, channel);
+        Ok(())
+    }
+
+    async fn unsubscribe(&self, id: ConnId, channel: Bytes) -> Result<()> {
+        self.enter(
+            "unsubscribe",
+            format!("{id}:{}", String::from_utf8_lossy(&channel)),
+        )
+        .await?;
+        // 和 core 一样:不管成败订阅都没了
+        self.ctl.lock().unwrap().subs.remove(&id);
+        Ok(())
+    }
+
+    async fn publish(&self, id: ConnId, channel: Bytes, message: Bytes) -> Result<u64> {
+        self.enter(
+            "publish",
+            format!("{id}:{}", String::from_utf8_lossy(&channel)),
+        )
+        .await?;
+        // 回环:订阅了这个频道的连接都收到
+        let (sink, targets): (_, Vec<ConnId>) = {
+            let c = self.ctl.lock().unwrap();
+            (
+                c.sink.clone(),
+                c.subs
+                    .iter()
+                    .filter(|(_, ch)| **ch == channel)
+                    .map(|(conn, _)| *conn)
+                    .collect(),
+            )
+        };
+        if let Some(sink) = sink {
+            for conn in &targets {
+                sink(PubsubMessage {
+                    conn: *conn,
+                    channel: channel.clone(),
+                    payload: message.clone(),
+                    at_ms: xredis_core::config::now_ms(),
+                });
+            }
+        }
+        Ok(targets.len() as u64)
+    }
+
+    async fn channels(&self, id: ConnId) -> Result<Vec<Bytes>> {
+        self.enter("channels", format!("{id}")).await?;
+        Ok(self.ctl.lock().unwrap().channel_list.clone())
+    }
+
+    fn set_message_sink(&self, sink: Arc<dyn Fn(PubsubMessage) + Send + Sync>) {
+        self.ctl.lock().unwrap().sink = Some(sink);
     }
 
     async fn read_string(&self, id: ConnId, key: Bytes) -> Result<Option<StringValue>> {

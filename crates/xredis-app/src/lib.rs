@@ -5,6 +5,7 @@ rust_i18n::i18n!("locales", fallback = "en", backend = crate::i18n::UserPacks);
 
 pub mod app;
 pub mod backend;
+pub mod console;
 pub mod errors;
 pub mod forms;
 pub mod i18n;
@@ -12,6 +13,7 @@ pub mod keylist;
 pub mod keyview;
 pub mod messages;
 pub mod msg;
+pub mod pubsub_view;
 pub mod runtime;
 // 假 Backend:只给测试用(本 crate 自己的测试,或别的 crate 在 dev-dependencies 里打开 `test-support`)
 #[cfg(any(test, feature = "test-support"))]

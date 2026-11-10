@@ -6,8 +6,10 @@
 use std::sync::Arc;
 
 use crate::backend::Backend;
+use crate::console::ConsoleMsg;
 use crate::keyview::ViewMsg;
 use crate::msg::{BackendCmd, KeysMsg, Msg};
+use crate::pubsub_view::PubSubMsg;
 
 pub struct Runtime {
     /// `Option` 是为了 `Drop` 里能把它取出来 `shutdown_background`(在异步环境里丢弃 runtime 会 panic)。
@@ -23,6 +25,14 @@ impl Runtime {
             .thread_name("xredis-rt")
             .enable_all()
             .build()?;
+        // 订阅收到的消息:按连接分流,变成 Msg 发回(无界 channel,不会阻塞 core 的监听任务)
+        let sink_tx = tx.clone();
+        backend.set_message_sink(Arc::new(move |m| {
+            let _ = sink_tx.try_send(Msg::PubSub {
+                id: m.conn,
+                msg: PubSubMsg::Incoming(m),
+            });
+        }));
         Ok(Self {
             rt: Some(rt),
             backend,
@@ -143,6 +153,58 @@ pub async fn execute(backend: &dyn Backend, cmd: BackendCmd) -> Option<Msg> {
             msg: KeysMsg::PasteChecked {
                 result: backend.preview_paste(id, text.clone()).await,
                 text,
+            },
+        },
+        BackendCmd::RunCommand {
+            id,
+            generation,
+            tokens,
+        } => Msg::Console {
+            id,
+            msg: ConsoleMsg::Executed {
+                generation,
+                result: backend.run_command(id, tokens).await,
+            },
+        },
+        BackendCmd::PubSubSubscribe {
+            id,
+            generation,
+            channel,
+        } => Msg::PubSub {
+            id,
+            msg: PubSubMsg::Subscribed {
+                generation,
+                result: backend.subscribe(id, channel).await,
+            },
+        },
+        BackendCmd::PubSubUnsubscribe {
+            id,
+            generation,
+            channel,
+        } => Msg::PubSub {
+            id,
+            msg: PubSubMsg::Unsubscribed {
+                generation,
+                result: backend.unsubscribe(id, channel).await,
+            },
+        },
+        BackendCmd::PubSubPublish {
+            id,
+            generation,
+            channel,
+            message,
+        } => Msg::PubSub {
+            id,
+            msg: PubSubMsg::Published {
+                generation,
+                result: backend.publish(id, channel, message).await,
+            },
+        },
+        BackendCmd::PubSubChannels { id, generation } => Msg::PubSub {
+            id,
+            msg: PubSubMsg::Channels {
+                generation,
+                result: backend.channels(id).await,
             },
         },
         BackendCmd::ViewDetails {

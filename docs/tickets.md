@@ -33,7 +33,7 @@
 | R-09b | gpui:Keys 子页的 New、Delete、Copy、Paste(含确认框) | 做完,审核通过 | 48 开,49 完,50 审 |
 | R-10 | gpui:String 编辑器、成员表和成员编辑器、十六进制视图、改名和 TTL(50 从 R-09 转来) | 拆成 R-10a、R-10b | 1 开,51 拆 |
 | R-10a | gpui:String 编辑器、新建 key 的编辑器、十六进制视图、改名和 TTL(语法高亮不做) | 做完,审核通过 | 51 完,52 审 |
-| R-10b | gpui:成员表(Hash、List、Set、ZSet)和成员编辑器;另加十六进制上限 64 KiB、"Plain text" 翻译、`ttl_text` 去重 | 待审 | 51 拆,52 加,53 完 |
+| R-10b | gpui:成员表(Hash、List、Set、ZSet)和成员编辑器;另加十六进制上限 64 KiB、"Plain text" 翻译、`ttl_text` 去重 | 做完,审核通过 | 51 拆,52 加,53 完,54 审 |
 | R-10c | 语法高亮:gpui-kit 的 `tree-sitter` 特性,只带 JSON;量发布版体积的增量 | 开着 | 52 开 |
 | R-11 | gpui:Console 和 Pub/Sub 子页 | 开着 | 1 开 |
 | R-12 | 验收:逐条过 `02` 的 P 和 L 编号、量内存和体积、发布版构建 | 开着 | 1 开 |

@@ -24,6 +24,8 @@ pub struct MainView {
     shown_toasts: HashSet<u64>,
     /// 界面上开着的弹窗,从下到上(和 `App` 的状态同步,见 `ui/dialogs.rs`)。
     pub(crate) dialogs: Vec<crate::ui::DialogKind>,
+    /// 每个 Tab 的 Keys 页的输入框和滚动位置(`ui/keys.rs`)。
+    pub(crate) keys_ui: crate::ui::KeysUiMap,
     _subs: Vec<Subscription>,
 }
 
@@ -63,6 +65,7 @@ impl MainView {
             runtime,
             shown_toasts: HashSet::new(),
             dialogs: Vec::new(),
+            keys_ui: Default::default(),
             _subs: vec![bounds_sub],
         };
         view.run(start, window, cx);
@@ -108,6 +111,7 @@ impl MainView {
 
     fn after_batch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sync_toasts(window, cx);
+        self.sync_keys_ui(window, cx);
         self.sync_dialogs(window, cx);
         cx.notify();
     }

@@ -1,5 +1,5 @@
 //! Tab 栏和主区域(P-04):每个连接一个可关闭的 Tab,Tab 内三个子页(Keys、Pub/Sub、Console)。
-//! 子页的内容在 R-09 到 R-11 做,这里先放占位;连接中、连接失败的状态画在这里。
+//! Keys 子页在 `keys.rs`;Pub/Sub、Console 在 R-11 做,这里先放占位;连接中、连接失败的状态画在这里。
 
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -97,10 +97,10 @@ impl MainView {
                             .on_click(send(cx, move || Msg::Reconnect(id))),
                     ),
             ),
-            TabStatus::Ready(_) => body
-                .child(self.render_subpage_switcher(id, tab.sub_page, cx))
-                .child(
-                    div()
+            TabStatus::Ready(_) => {
+                let content = match tab.sub_page {
+                    SubPage::Keys => self.render_keys_page(id, cx),
+                    SubPage::PubSub | SubPage::Console => div()
                         .id("subpage-content")
                         .flex_1()
                         .text_color(cx.theme().muted_foreground)
@@ -108,8 +108,12 @@ impl MainView {
                             SubPage::Keys => self.app.t("tab.sub.keys"),
                             SubPage::PubSub => self.app.t("tab.sub.pubsub"),
                             SubPage::Console => self.app.t("tab.sub.console"),
-                        }),
-                ),
+                        })
+                        .into_any_element(),
+                };
+                body.child(self.render_subpage_switcher(id, tab.sub_page, cx))
+                    .child(content)
+            }
         }
     }
 

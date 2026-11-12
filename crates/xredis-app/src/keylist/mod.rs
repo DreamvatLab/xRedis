@@ -199,6 +199,21 @@ impl KeyRow {
         self.loaded().map(|d| d.ttl)
     }
 
+    /// 长度列的文字。没加载或没有长度(key 已不存在)是 `None`,界面画占位;0 是合法值(L-16)。
+    pub fn length_text(&self) -> Option<String> {
+        self.length().map(|n| n.to_string())
+    }
+
+    /// TTL 列的文字(秒):-1 永不过期、-2 已不存在,和 Redis 的返回值一致,v1 也是直接显示数字。
+    /// 没加载是 `None`(L-16:-1 是合法值,不能拿它表示没加载)。
+    pub fn ttl_text(&self) -> Option<String> {
+        self.ttl().map(|t| match t {
+            Ttl::Missing => "-2".to_string(),
+            Ttl::Persistent => "-1".to_string(),
+            Ttl::Seconds(n) => n.to_string(),
+        })
+    }
+
     /// TTL 为 -2:这个 key 已经不存在了(P-14)。
     pub fn is_deleted(&self) -> bool {
         self.ttl() == Some(Ttl::Missing)
@@ -209,6 +224,15 @@ impl KeyRow {
         self.kind().is_some_and(KeyType::openable)
     }
 }
+
+/// New 下拉里的类型(P-20):五种基本类型,顺序固定。
+pub const NEW_KEY_TYPES: [KeyType; 5] = [
+    KeyType::String,
+    KeyType::Hash,
+    KeyType::List,
+    KeyType::Set,
+    KeyType::ZSet,
+];
 
 /// 类型标签的文字(P-15)。颜色由 GUI 定。没加载或不认识的显示 `None`。
 pub fn type_label(kind: Option<&KeyType>) -> &'static str {
@@ -221,6 +245,34 @@ pub fn type_label(kind: Option<&KeyType>) -> &'static str {
         Some(KeyType::Stream) => "Stream",
         _ => "None",
     }
+}
+
+/// 底部状态栏要显示的文字(P-13),都已翻译好。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyStatus {
+    /// “Loaded 3 / 12”;没有总数时是“Loaded 3”。
+    pub loaded: String,
+    /// 已加载百分比,只在 pattern 为空或 `*` 时有。
+    pub percent: Option<String>,
+    /// 游标没归零时的提示。
+    pub more_hint: Option<String>,
+    /// 悬停看的游标。
+    pub cursor: String,
+    /// 列头过滤让一部分行不显示时,“N shown”;没有过滤掉东西时是 `None`。
+    pub filtered: Option<String>,
+}
+
+/// 工具栏每个按钮现在能不能点。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyActions {
+    pub search: bool,
+    pub more: bool,
+    pub all: bool,
+    pub stop: bool,
+    pub new_key: bool,
+    pub delete: bool,
+    pub copy: bool,
+    pub paste: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -360,6 +412,18 @@ impl KeyList {
         self.view.len()
     }
 
+    /// 过滤、排序之后第 `ix` 行(虚拟滚动按下标取可见的行,不用遍历)。
+    pub fn view_row(&self, ix: usize) -> Option<&KeyRow> {
+        self.view.get(ix).map(|&i| &self.rows[i])
+    }
+
+    /// 表头的全选框是不是勾着:当前过滤后的每一行都已选中(没有行时不算)。
+    pub fn all_filtered_selected(&self) -> bool {
+        !self.view.is_empty()
+            && self.selected.len() >= self.view.len()
+            && self.view().all(|r| self.selected.contains(&r.key))
+    }
+
     pub fn loaded_count(&self) -> usize {
         self.rows.len()
     }
@@ -408,6 +472,63 @@ impl KeyList {
             return None;
         }
         Some((self.rows.len() as f64 / total as f64 * 100.0).min(100.0))
+    }
+
+    /// 底部状态栏的文字。`info_total` 是连接信息里当前库的 key 数(没有 DBSIZE 的最新值时用它)。
+    pub fn status(&self, lang: &str, info_total: Option<u64>) -> KeyStatus {
+        let loaded_n = self.rows.len().to_string();
+        let total = self.db_total.or(info_total);
+        let loaded = match total {
+            Some(t) => tr_with(
+                lang,
+                "keys.status.loaded_of",
+                &[("loaded", &loaded_n), ("total", &t.to_string())],
+            ),
+            None => tr_with(lang, "keys.status.loaded", &[("loaded", &loaded_n)]),
+        };
+        KeyStatus {
+            loaded,
+            percent: self.loaded_percent(info_total).map(|p| format!("{p:.2}%")),
+            more_hint: self.has_more().then(|| tr(lang, "keys.status.more_hint")),
+            cursor: tr_with(
+                lang,
+                "keys.status.cursor",
+                &[("cursor", &self.cursor.to_string())],
+            ),
+            filtered: (self.view.len() != self.rows.len()).then(|| {
+                tr_with(
+                    lang,
+                    "keys.status.shown",
+                    &[("shown", &self.view.len().to_string())],
+                )
+            }),
+        }
+    }
+
+    /// 工具栏按钮的可用状态:忙的时候除了 Stop 都不能点。
+    pub fn actions(&self) -> KeyActions {
+        let idle = !self.is_busy();
+        let selected = idle && !self.selected.is_empty();
+        KeyActions {
+            search: idle,
+            more: idle && self.has_more(),
+            all: idle && self.has_more(),
+            stop: self.cancellable(),
+            new_key: idle,
+            delete: selected,
+            copy: selected,
+            paste: idle,
+        }
+    }
+
+    /// 这些可见的行里有没有还没请求过详情的(并且设置打开了自动加载)。GUI 滚动时据此决定要不要发 `Visible`。
+    pub fn wants_details(&self, settings: &Settings, visible: &[Bytes]) -> bool {
+        settings.show_key_details
+            && visible.iter().any(|k| {
+                self.index
+                    .get(k)
+                    .is_some_and(|&i| self.rows[i].details == Details::NotLoaded)
+            })
     }
 
     // ---- 重置 ----

@@ -19,7 +19,7 @@ use crate::console::{Console, ConsoleMsg};
 use crate::errors::{describe, describe_import_warning, describe_startup_warning};
 use crate::forms::{ConnectionEditor, SettingsEditor};
 use crate::i18n::{export_template, resolve_language, tr, tr_with};
-use crate::keylist::{Ctx as KeysCtx, KeyList, KeysMsg};
+use crate::keylist::{Ctx as KeysCtx, KeyList, KeyStatus, KeysMsg};
 use crate::keyview::{KeyView, ListEffect, ViewMsg};
 use crate::messages::{Level, MessageBar};
 use crate::msg::{BackendCmd, Cmd, Epoch, Msg, PlatformCmd, Saved, StartupData, SubPage};
@@ -60,6 +60,16 @@ pub struct Tab {
     pub pubsub: PubSubView,
     /// 视图代号的计数器,只增不减:换了视图,旧视图的迟到结果对不上就丢弃。
     view_seq: u64,
+}
+
+/// 库下拉里的一项。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DbChoice {
+    pub db: u32,
+    pub keys: i64,
+    pub selected: bool,
+    /// 翻译好的标签,如 `db3 (5 keys)`。
+    pub label: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -241,6 +251,41 @@ impl App {
 
     pub fn connection(&self, id: ConnId) -> Option<&ConnectionConfig> {
         self.connections.iter().find(|c| c.id == id)
+    }
+
+    /// 库下拉的选项(P-05):每个库一项,带 key 数和标签;连接没就绪时是空的。
+    pub fn db_choices(&self, id: ConnId) -> Vec<DbChoice> {
+        let Some(TabStatus::Ready(info)) = self.tab(id).map(|t| &t.status) else {
+            return Vec::new();
+        };
+        let selected = self.connection(id).map_or(0, |c| c.selected_db);
+        info.databases
+            .iter()
+            .map(|d| DbChoice {
+                db: d.db,
+                keys: d.keys,
+                selected: d.db == selected,
+                label: self.t_with(
+                    "db.item",
+                    &[("index", &d.db.to_string()), ("keys", &d.keys.to_string())],
+                ),
+            })
+            .collect()
+    }
+
+    /// Keys 页底部状态栏的文字(P-13);Tab 没就绪时是 `None`。
+    pub fn keys_status(&self, id: ConnId) -> Option<KeyStatus> {
+        let tab = self.tab(id)?;
+        let TabStatus::Ready(info) = &tab.status else {
+            return None;
+        };
+        let selected = self.connection(id).map_or(0, |c| c.selected_db);
+        let info_total = info
+            .databases
+            .iter()
+            .find(|d| d.db == selected)
+            .and_then(|d| u64::try_from(d.keys).ok());
+        Some(tab.keys.status(&self.lang, info_total))
     }
 
     // ---- 内部工具 ----

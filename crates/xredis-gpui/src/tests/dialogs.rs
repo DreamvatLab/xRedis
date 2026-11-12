@@ -19,7 +19,7 @@ fn open_dialogs(cx: &mut gpui_kit::TestAppContext, env: &Env) -> Vec<DialogKind>
 }
 
 /// 点进一个输入框,把里面的内容换成 `text`(全选后打字)。
-fn type_into(cx: &mut gpui_kit::TestAppContext, env: &Env, id: &str, text: &str) {
+pub(super) fn type_into(cx: &mut gpui_kit::TestAppContext, env: &Env, id: &str, text: &str) {
     click(cx, env, id);
     let text = text.to_string();
     cx.update_window(env.window, |_, window, cx| {
@@ -30,7 +30,7 @@ fn type_into(cx: &mut gpui_kit::TestAppContext, env: &Env, id: &str, text: &str)
     cx.run_until_parked();
 }
 
-fn press(cx: &mut gpui_kit::TestAppContext, env: &Env, key: &str) {
+pub(super) fn press(cx: &mut gpui_kit::TestAppContext, env: &Env, key: &str) {
     let key = key.to_string();
     cx.update_window(env.window, |_, window, cx| window.press(&key, cx))
         .unwrap();

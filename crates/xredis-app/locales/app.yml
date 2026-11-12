@@ -373,6 +373,74 @@ keys.paste_summary:
   en: "%{total} key(s) in the clipboard, %{existing} of them already exist."
 keys.pasted:
   en: "Pasted %{count} key(s) from the clipboard."
+keys.db:
+  en: "DB"
+keys.search_placeholder:
+  en: "Key (supports *)"
+keys.scan:
+  en: "Scan"
+keys.more:
+  en: "More"
+keys.more_tip:
+  en: "Load more"
+keys.all:
+  en: "All"
+keys.all_tip:
+  en: "Load all"
+keys.stop:
+  en: "Stop"
+keys.new:
+  en: "New"
+keys.copy:
+  en: "Copy"
+keys.paste:
+  en: "Paste"
+keys.col.key:
+  en: "Key"
+keys.col.type:
+  en: "Type"
+keys.col.length:
+  en: "Length"
+keys.col.ttl:
+  en: "TTL"
+keys.col.actions:
+  en: "Actions"
+keys.filter_placeholder:
+  en: "Filter loaded keys"
+keys.refresh_row:
+  en: "Reload type, length and TTL"
+keys.row_deleted:
+  en: "deleted"
+keys.row_binary:
+  en: "binary name"
+keys.empty:
+  en: "No keys"
+keys.scanning:
+  en: "Scanning..."
+keys.working:
+  en: "Working..."
+keys.status.loaded_of:
+  en: "Loaded %{loaded} / %{total}"
+keys.status.loaded:
+  en: "Loaded %{loaded}"
+keys.status.more_hint:
+  en: "There are keys not loaded yet, click 'More' or 'All' to continue scanning."
+keys.status.cursor:
+  en: "Cursor: %{cursor}"
+keys.status.shown:
+  en: "%{shown} shown"
+keys.delete_confirm.title:
+  en: "Delete keys"
+keys.delete_confirm.body:
+  en: "Are you sure to delete %{count} selected key(s)?"
+keys.paste_confirm.title:
+  en: "Paste keys"
+keys.paste_confirm.overwrite:
+  en: "Overwrite keys that already exist"
+keys.paste_confirm.hint:
+  en: "Keys that already exist make the paste fail unless you overwrite them."
+keys.view_placeholder:
+  en: "The key editor is not available in this build yet."
 err.clipboard_write:
   en: "Could not write to the clipboard: %{reason}. It may be held by another app (an input method, a clipboard manager, remote desktop). Try again."
 err.clipboard_read:

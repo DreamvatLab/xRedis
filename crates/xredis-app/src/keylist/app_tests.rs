@@ -395,3 +395,35 @@ fn each_tab_has_its_own_key_list() {
     assert_eq!(keys_list(&app, ib).pattern, "only-b");
     let _ = gb;
 }
+
+/// P-05:库下拉的选项来自连接信息(每个库的 key 数),当前库来自连接配置;连接没就绪时没有选项。
+#[test]
+fn p05_db_choices_come_from_the_connection_info_and_the_selected_db() {
+    let mut c = cfg("a");
+    c.selected_db = 2;
+    let id = c.id;
+    let mut app = ready_app(vec![c]);
+    assert!(app.db_choices(id).is_empty());
+    let epoch = connect_epoch(&app.update(Msg::OpenConnection(id)));
+    assert!(app.db_choices(id).is_empty(), "still connecting");
+    let mut i = info(4);
+    i.databases[2].keys = 30;
+    i.databases[3].keys = 5;
+    app.update(Msg::Connected {
+        id,
+        epoch,
+        result: Ok(i),
+    });
+    let choices = app.db_choices(id);
+    assert_eq!(choices.len(), 4);
+    assert_eq!(
+        choices
+            .iter()
+            .map(|c| (c.db, c.keys, c.selected))
+            .collect::<Vec<_>>(),
+        vec![(0, 0, false), (1, 0, false), (2, 30, true), (3, 5, false)]
+    );
+    assert_eq!(choices[3].label, "db3 (5 keys)");
+    // 状态栏的总数默认取当前库的 key 数
+    assert_eq!(app.keys_status(id).unwrap().loaded, "Loaded 0 / 30");
+}

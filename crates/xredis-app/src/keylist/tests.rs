@@ -1506,3 +1506,191 @@ fn p42_paste_failures_report_and_refresh_only_when_something_was_written() {
         "keys before the failure were written: refresh"
     );
 }
+
+// ---------------------------------------------------------------------------
+// R-09:GUI 要读的文案和可用状态(GUI 不自己算)
+// ---------------------------------------------------------------------------
+
+/// P-13:“已加载 / 总数”、百分比(只在 pattern 为空或 `*` 时)、没加载完的提示、悬停的游标。
+#[test]
+fn p13_status_texts_come_from_the_list() {
+    let mut h = H::new();
+    h.settings.auto_scan_limit = 0;
+    h.search_with(&["a", "b", "c"], 77);
+    let s = h.list.status("en", Some(12));
+    assert_eq!(s.loaded, "Loaded 3 / 12");
+    assert_eq!(s.percent.as_deref(), Some("25.00%"));
+    assert!(s.more_hint.is_some(), "the cursor is not zero");
+    assert_eq!(s.cursor, "Cursor: 77");
+    assert_eq!(s.filtered, None);
+
+    // 没有总数时只显示已加载数
+    assert_eq!(h.list.status("en", None).loaded, "Loaded 3");
+    assert_eq!(h.list.status("en", None).percent, None);
+
+    // DBSIZE 的最新值优先于连接信息里的
+    h.list.db_total = Some(6);
+    assert_eq!(h.list.status("en", Some(12)).loaded, "Loaded 3 / 6");
+    assert_eq!(
+        h.list.status("en", Some(12)).percent.as_deref(),
+        Some("50.00%")
+    );
+
+    // 有 pattern:不显示百分比
+    h.send(KeysMsg::SetPattern("user:*".into()));
+    assert_eq!(h.list.status("en", Some(12)).percent, None);
+
+    // 游标归零:没有“还有没加载的”提示
+    let mut h = H::new();
+    h.search_with(&["a"], 0);
+    assert_eq!(h.list.status("en", Some(1)).more_hint, None);
+
+    // 过滤后显示“显示几个”
+    let mut h = H::new();
+    h.search_with(&["apple", "banana", "avocado"], 0);
+    h.send(KeysMsg::SetFilter("a".into()));
+    assert_eq!(h.list.status("en", None).filtered, None, "all three match");
+    h.send(KeysMsg::SetFilter("av".into()));
+    assert_eq!(
+        h.list.status("en", None).filtered.as_deref(),
+        Some("1 shown")
+    );
+}
+
+/// 工具栏每个按钮能不能点,由列表状态决定。
+#[test]
+fn toolbar_actions_follow_the_list_state() {
+    let mut h = H::new();
+    h.settings.auto_scan_limit = 0;
+    // 还没搜索过:能搜索、New、Paste;没有选中、没有更多
+    let a = h.list.actions();
+    assert!(a.search && a.new_key && a.paste);
+    assert!(!a.more && !a.all && !a.stop && !a.delete && !a.copy);
+
+    h.search_with(&["a", "b"], 5);
+    let a = h.list.actions();
+    assert!(a.more && a.all, "the cursor is live");
+    assert!(!a.delete && !a.copy, "nothing selected");
+
+    h.send(KeysMsg::Select {
+        key: k("a"),
+        on: true,
+    });
+    let a = h.list.actions();
+    assert!(a.delete && a.copy);
+
+    // 扫描中(All):只有 Stop 能点
+    h.send(KeysMsg::LoadAll);
+    let a = h.list.actions();
+    assert!(a.stop);
+    assert!(!a.search && !a.more && !a.all && !a.new_key && !a.paste && !a.delete && !a.copy);
+}
+
+/// P-14:TTL 和长度的文字;没加载的是 `None`(界面画占位),-1 和 0 都是合法值(L-16)。
+#[test]
+fn p14_cell_texts_distinguish_not_loaded_from_zero_and_minus_one() {
+    let mut h = H::new();
+    let (g, _) = h.search_with(&["a", "b", "c", "d"], 0);
+    let row = |h: &H, n: usize| h.list.view().nth(n).unwrap().clone();
+    assert_eq!(row(&h, 0).ttl_text(), None);
+    assert_eq!(row(&h, 0).length_text(), None);
+    h.send(loaded_ok(
+        g,
+        "a",
+        det(KeyType::String, Some(0), Ttl::Persistent),
+    ));
+    h.send(loaded_ok(
+        g,
+        "b",
+        det(KeyType::List, Some(7), Ttl::Seconds(90)),
+    ));
+    h.send(loaded_ok(g, "c", det(KeyType::None, None, Ttl::Missing)));
+    assert_eq!(row(&h, 0).length_text().as_deref(), Some("0"));
+    assert_eq!(row(&h, 0).ttl_text().as_deref(), Some("-1"));
+    assert_eq!(row(&h, 1).length_text().as_deref(), Some("7"));
+    assert_eq!(row(&h, 1).ttl_text().as_deref(), Some("90"));
+    assert_eq!(row(&h, 2).ttl_text().as_deref(), Some("-2"));
+    assert_eq!(
+        row(&h, 2).length_text(),
+        None,
+        "no length for a missing key"
+    );
+}
+
+/// GUI 滚动时问“这些可见的行要不要加载详情”:没开设置、都已加载或在排队时不用再发。
+#[test]
+fn wants_details_only_for_visible_rows_that_were_never_requested() {
+    let mut h = H::new();
+    let (g, _) = h.search_with(&["a", "b"], 0);
+    let vis = [k("a"), k("b")];
+    assert!(h.list.wants_details(&h.settings, &vis));
+    h.send(KeysMsg::Visible(vis.to_vec()));
+    assert!(
+        !h.list.wants_details(&h.settings, &vis),
+        "queued or loading"
+    );
+    h.send(loaded_ok(
+        g,
+        "a",
+        det(KeyType::String, Some(1), Ttl::Persistent),
+    ));
+    h.send(loaded_ok(
+        g,
+        "b",
+        det(KeyType::String, Some(1), Ttl::Persistent),
+    ));
+    assert!(!h.list.wants_details(&h.settings, &vis), "loaded");
+    // 新搜索后同样的 key 又没加载了
+    h.search_with(&["a", "b"], 0);
+    assert!(h.list.wants_details(&h.settings, &vis));
+    // 设置关着:不自动加载
+    h.settings.show_key_details = false;
+    assert!(!h.list.wants_details(&h.settings, &vis));
+    // 不在列表里的 key 忽略
+    h.settings.show_key_details = true;
+    assert!(!h.list.wants_details(&h.settings, &[k("zzz")]));
+}
+
+/// P-20:New 下拉的五种类型;P-16:能不能打开由行自己判断。
+#[test]
+fn p20_new_key_types_are_the_five_basic_ones() {
+    assert_eq!(
+        NEW_KEY_TYPES.to_vec(),
+        vec![
+            KeyType::String,
+            KeyType::Hash,
+            KeyType::List,
+            KeyType::Set,
+            KeyType::ZSet
+        ]
+    );
+    assert!(NEW_KEY_TYPES.iter().all(KeyType::openable));
+}
+
+/// 虚拟滚动按下标取行;表头全选框跟着“过滤后的行是否都选中”走。
+#[test]
+fn view_rows_by_index_and_the_select_all_state() {
+    let mut h = H::new();
+    h.search_with(&["b", "a", "c"], 0);
+    assert_eq!(h.list.view_row(0).unwrap().display, "a");
+    assert_eq!(h.list.view_row(2).unwrap().display, "c");
+    assert!(h.list.view_row(3).is_none());
+    assert!(!h.list.all_filtered_selected());
+    h.send(KeysMsg::SelectAllFiltered(true));
+    assert!(h.list.all_filtered_selected());
+    h.send(KeysMsg::Select {
+        key: k("b"),
+        on: false,
+    });
+    assert!(!h.list.all_filtered_selected());
+    // 过滤后只看 a:选中 a 就算全选(b 已不在视图里)
+    h.send(KeysMsg::SetFilter("a".into()));
+    h.send(KeysMsg::Select {
+        key: k("a"),
+        on: true,
+    });
+    assert!(h.list.all_filtered_selected());
+    // 空列表不算全选
+    let h = H::new();
+    assert!(!h.list.all_filtered_selected());
+}

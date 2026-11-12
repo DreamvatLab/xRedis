@@ -194,6 +194,7 @@ fn every_key_used_in_code_exists_in_english() {
         "conn",
         "tab",
         "db",
+        "keys",
         "editor",
         "validation",
         "settings",

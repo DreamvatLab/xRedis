@@ -5,6 +5,7 @@
 
 mod dialogs;
 mod editor_dialog;
+mod keys;
 mod messagebar;
 mod notice_dialogs;
 mod settings_dialog;
@@ -19,6 +20,7 @@ use xredis_app::Msg;
 use crate::model::MainView;
 
 pub use dialogs::DialogKind;
+pub(crate) use keys::KeysUiMap;
 
 impl Render for MainView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

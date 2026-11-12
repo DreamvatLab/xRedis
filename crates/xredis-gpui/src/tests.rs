@@ -377,3 +377,35 @@ fn click_index(cx: &mut TestAppContext, env: &Env, ix: usize) {
     .unwrap();
     cx.run_until_parked();
 }
+
+#[gpui_kit::test]
+fn r12b_the_embedded_font_is_registered_and_the_theme_uses_it(cx: &mut TestAppContext) {
+    use gpui_kit::component::Theme;
+    cx.update(gpui_kit::init);
+    // 无头(测试)平台的文本系统不加载字体,`all_font_names()` 恒为空,所以这里只能断言
+    // 注册调用不报错;字体文件本身有没有 JetBrains Mono 由下一个测试查。
+    cx.update(|cx| crate::fonts::install(cx).expect("register the embedded fonts"));
+    cx.update(|cx| {
+        let theme = Theme::global(cx);
+        assert_eq!(theme.font_family.as_ref(), "JetBrains Mono");
+        // 编辑器(EditorState)读的是 mono_font_family
+        assert_eq!(theme.mono_font_family.as_ref(), "JetBrains Mono");
+    });
+}
+
+#[test]
+fn r12b_the_embedded_font_files_are_real_ttf_files() {
+    assert_eq!(crate::fonts::FONT_FILES.len(), 4);
+    for bytes in crate::fonts::FONT_FILES {
+        assert!(bytes.len() > 100_000);
+        // TrueType 的文件头(0x00010000)
+        assert_eq!(&bytes[..4], &[0, 1, 0, 0]);
+        // name 表里的字体族名,和主题里设的一致
+        // (Windows 平台的记录是 UTF-16BE)
+        let family: Vec<u8> = crate::fonts::FAMILY
+            .encode_utf16()
+            .flat_map(u16::to_be_bytes)
+            .collect();
+        assert!(bytes.windows(family.len()).any(|w| w == family.as_slice()));
+    }
+}

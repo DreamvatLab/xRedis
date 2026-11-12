@@ -23,6 +23,10 @@ fn main() {
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            // 字体失败不致命:界面退回系统字体
+            if let Err(err) = xredis_gpui::fonts::install(cx) {
+                tracing::warn!("cannot register the embedded font: {err}");
+            }
             let size = size(px(width as f32), px(height as f32));
             let bounds = Bounds::centered(None, size, cx);
             let options = WindowOptions {

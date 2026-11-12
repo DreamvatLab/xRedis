@@ -309,3 +309,71 @@ fn a_maximized_window_reports_its_restore_size_and_the_flag() {
         (1000, 701, false)
     );
 }
+
+/// 窗口上一帧画出来的文字。
+fn painted_texts(cx: &mut TestAppContext, env: &Env) -> Vec<String> {
+    cx.update_window(env.window, |_, window, cx| {
+        window.render_frame(cx);
+        gpui_kit::base::test_support::texts(window)
+            .iter()
+            .map(|t| t.text().to_string())
+            .collect()
+    })
+    .unwrap()
+}
+
+#[gpui_kit::test]
+fn r12a_an_unnamed_connection_shows_host_and_port_in_sidebar_and_tab(cx: &mut TestAppContext) {
+    let (env, ids) = setup(cx, &["", "缓存库"]);
+    let texts = painted_texts(cx, &env);
+    let count = |s: &str| texts.iter().filter(|t| t.as_str() == s).count();
+    assert_eq!(
+        count("127.0.0.1:6379"),
+        2,
+        "unnamed: host:port once as the name; named: once as the subtitle. got {texts:?}"
+    );
+    assert_eq!(count("缓存库"), 1, "{texts:?}");
+
+    click(cx, &env, &format!("conn-{}", ids[0]));
+    wait(cx, &env, "tab ready", is_ready);
+    let label = cx
+        .update_window(env.window, |_, window, cx| {
+            window.render_frame(cx);
+            window.find(0usize).label().map(str::to_string)
+        })
+        .unwrap();
+    assert_eq!(label.as_deref(), Some("127.0.0.1:6379"), "the tab title");
+}
+
+#[gpui_kit::test]
+fn r12a_clicking_a_tab_activates_it_and_only_the_close_button_closes(cx: &mut TestAppContext) {
+    let (env, ids) = setup(cx, &["", "缓存库"]);
+    for id in &ids {
+        click(cx, &env, &format!("conn-{id}"));
+        wait(cx, &env, "tab ready", is_ready);
+    }
+    assert_eq!(read(cx, &env, |a| a.tabs.len()), 2);
+    assert_eq!(read(cx, &env, |a| a.active), Some(ids[1]));
+
+    // Tab 的元素 id 是它在 TabBar 里的序号;点标题区(不是 ×)切换,不关
+    click_index(cx, &env, 0);
+    assert_eq!(read(cx, &env, |a| a.active), Some(ids[0]));
+    assert_eq!(read(cx, &env, |a| a.tabs.len()), 2);
+    click_index(cx, &env, 1);
+    assert_eq!(read(cx, &env, |a| a.active), Some(ids[1]));
+    assert_eq!(read(cx, &env, |a| a.tabs.len()), 2);
+
+    click(cx, &env, &format!("tab-close-{}", ids[1]));
+    assert_eq!(read(cx, &env, |a| a.tabs.len()), 1);
+    assert_eq!(read(cx, &env, |a| a.active), Some(ids[0]));
+}
+
+fn click_index(cx: &mut TestAppContext, env: &Env, ix: usize) {
+    cx.update_window(env.window, |_, window, cx| {
+        window.render_frame(cx);
+        // 点标题区的左侧(离右边的 × 远);无头平台没有真字体,按中心点会落在 ×(宽度由字体决定)上
+        window.click_at(ix, gpui_kit::point(px(8.), px(18.)), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+}

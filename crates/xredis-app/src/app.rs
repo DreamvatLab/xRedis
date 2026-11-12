@@ -253,6 +253,17 @@ impl App {
         self.connections.iter().find(|c| c.id == id)
     }
 
+    /// 连接在界面上的名字(侧栏、Tab 标题):有名字用名字,否则 `host:port`。连接不存在时是空串。
+    pub fn connection_name(&self, id: ConnId) -> String {
+        self.connection(id).map(display_name).unwrap_or_default()
+    }
+
+    /// 侧栏第二行:有名字时是 `host:port`;没名字时显示名本身就是 `host:port`,不重复,返回 `None`。
+    pub fn connection_subtitle(&self, id: ConnId) -> Option<String> {
+        let c = self.connection(id)?;
+        (!c.name.trim().is_empty()).then(|| format!("{}:{}", c.host, c.port))
+    }
+
     /// 库下拉的选项(P-05):每个库一项,带 key 数和标签;连接没就绪时是空的。
     pub fn db_choices(&self, id: ConnId) -> Vec<DbChoice> {
         let Some(TabStatus::Ready(info)) = self.tab(id).map(|t| &t.status) else {

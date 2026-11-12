@@ -1905,3 +1905,28 @@ fn p62_document_sections_come_from_the_app_and_follow_the_language() {
     app.lang = "en".into();
     assert_eq!(app.privacy_sections(), privacy);
 }
+
+#[test]
+fn r12a_connection_name_falls_back_to_host_and_port() {
+    let named = cfg("缓存库", 0, 1);
+    let blank = cfg("", 1, 1);
+    let spaces = cfg("   ", 2, 1);
+    let (n, b, s) = (named.id, blank.id, spaces.id);
+    let app = ready_app(vec![named, blank, spaces]);
+    assert_eq!(app.connection_name(n), "缓存库");
+    assert_eq!(
+        app.connection_subtitle(n).as_deref(),
+        Some("127.0.0.1:6379")
+    );
+    for id in [b, s] {
+        assert_eq!(app.connection_name(id), "127.0.0.1:6379");
+        assert_eq!(
+            app.connection_subtitle(id),
+            None,
+            "no duplicate second line"
+        );
+    }
+    let unknown = ConnId::new();
+    assert_eq!(app.connection_name(unknown), "");
+    assert_eq!(app.connection_subtitle(unknown), None);
+}

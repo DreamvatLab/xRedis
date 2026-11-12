@@ -37,12 +37,7 @@ impl MainView {
         let view = cx.entity();
         let tabs = self.app.tabs.iter().map(|t| {
             let id = t.id;
-            let name = self
-                .app
-                .connection(id)
-                .map(|c| c.name.clone())
-                .unwrap_or_default();
-            Tab::new().label(name).suffix(
+            Tab::new().label(self.app.connection_name(id)).suffix(
                 Button::new(SharedString::from(format!("tab-close-{id}")))
                     .ghost()
                     .compact()

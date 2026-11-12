@@ -3,6 +3,7 @@
 
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::label::Label;
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, IconName, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -53,58 +54,57 @@ impl MainView {
                 .child(add)
         };
 
-        let rows = self.app.connections.iter().map(|c| {
-            let id = c.id;
-            let open = self.app.tab(id).is_some();
-            let active = self.app.active == Some(id);
-            let (edit, delete) = (self.app.t("conn.menu.edit"), self.app.t("conn.menu.delete"));
-            let menu_view = view.clone();
-            let initial: String = c.name.chars().next().map(String::from).unwrap_or_default();
-            let row = div()
-                .id(SharedString::from(format!("conn-{id}")))
-                .test_support()
-                .px_2()
-                .py_1()
-                .rounded(theme.radius)
-                .cursor_pointer()
-                .when(active, |d| d.bg(theme.list_active))
-                .when(!active, |d| d.hover(|d| d.bg(theme.list_hover)))
-                .on_click(send(cx, move || Msg::OpenConnection(id)))
-                .context_menu(move |menu, _, _| {
-                    menu.item(
-                        PopupMenuItem::new(edit.clone())
-                            .on_click(send_to(&menu_view, move || Msg::OpenEditor(Some(id)))),
-                    )
-                    .item(
-                        PopupMenuItem::new(delete.clone())
-                            .on_click(send_to(&menu_view, move || Msg::DeleteRequested(id))),
-                    )
-                });
-            if collapsed {
-                row.child(div().w_full().text_center().child(initial))
-            } else {
-                row.child(
-                    v_flex()
-                        .child(
-                            div()
-                                .font_weight(if open {
-                                    FontWeight::SEMIBOLD
-                                } else {
-                                    FontWeight::NORMAL
-                                })
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .child(c.name.clone()),
+        let rows =
+            self.app.connections.iter().map(|c| {
+                let id = c.id;
+                let open = self.app.tab(id).is_some();
+                let active = self.app.active == Some(id);
+                let (edit, delete) = (self.app.t("conn.menu.edit"), self.app.t("conn.menu.delete"));
+                let menu_view = view.clone();
+                let name = self.app.connection_name(id);
+                let subtitle = self.app.connection_subtitle(id);
+                let initial: String = name.chars().next().map(String::from).unwrap_or_default();
+                let row = div()
+                    .id(SharedString::from(format!("conn-{id}")))
+                    .test_support()
+                    .px_2()
+                    .py_1()
+                    .rounded(theme.radius)
+                    .cursor_pointer()
+                    .when(active, |d| d.bg(theme.list_active))
+                    .when(!active, |d| d.hover(|d| d.bg(theme.list_hover)))
+                    .on_click(send(cx, move || Msg::OpenConnection(id)))
+                    .context_menu(move |menu, _, _| {
+                        menu.item(
+                            PopupMenuItem::new(edit.clone())
+                                .on_click(send_to(&menu_view, move || Msg::OpenEditor(Some(id)))),
                         )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child(format!("{}:{}", c.host, c.port)),
-                        ),
-                )
-            }
-        });
+                        .item(
+                            PopupMenuItem::new(delete.clone())
+                                .on_click(send_to(&menu_view, move || Msg::DeleteRequested(id))),
+                        )
+                    });
+                if collapsed {
+                    row.child(div().w_full().text_center().child(initial))
+                } else {
+                    row.child(
+                        v_flex()
+                            .child(
+                                Label::new(name)
+                                    .font_weight(if open {
+                                        FontWeight::SEMIBOLD
+                                    } else {
+                                        FontWeight::NORMAL
+                                    })
+                                    .overflow_hidden()
+                                    .text_ellipsis(),
+                            )
+                            .children(subtitle.map(|s| {
+                                Label::new(s).text_xs().text_color(theme.muted_foreground)
+                            })),
+                    )
+                }
+            });
 
         v_flex()
             .id("sidebar")

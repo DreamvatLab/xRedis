@@ -69,8 +69,9 @@ impl Render for NoticeBody {
         let root = v_flex().gap_3().px_4();
         match self.kind {
             DialogKind::Confirm => {
-                let Some(Confirm::DeleteConnection { name, .. }) = &app.confirm else {
-                    return div().into_any_element();
+                let name = match &app.confirm {
+                    Some(Confirm::DeleteConnection { name, .. }) => name,
+                    None => return div().into_any_element(),
                 };
                 root.id("confirm")
                     .test_support()
@@ -130,10 +131,7 @@ impl Render for NoticeBody {
                     .into_any_element()
             }
             DialogKind::Privacy => {
-                let sections = ["intro", "data", "storage", "security", "updates", "contact"]
-                    .iter()
-                    .map(|k| (t(&format!("privacy.{k}_title")), t(&format!("privacy.{k}"))))
-                    .collect();
+                let sections = app.privacy_sections();
                 root.id("privacy")
                     .test_support()
                     .child(title(t("privacy.title")))
@@ -149,15 +147,7 @@ impl Render for NoticeBody {
                     .into_any_element()
             }
             DialogKind::Agreement => {
-                let sections = (0..=6)
-                    .map(|i| {
-                        (
-                            t(&format!("disclaimer.p{i}_title")),
-                            t(&format!("disclaimer.p{i}")),
-                        )
-                    })
-                    .chain([(String::new(), t("disclaimer.signature"))])
-                    .collect();
+                let sections = app.agreement_sections();
                 let buttons = if app.agreed() {
                     // 已经同意过,从 Help 打开只是查看
                     h_flex().gap_2().justify_end().child(

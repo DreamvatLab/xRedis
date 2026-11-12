@@ -1875,3 +1875,33 @@ fn switching_to_an_available_language_translates_the_ui_and_tells_the_gui() {
 
     crate::i18n::load_user_packs(std::path::Path::new("Z:/definitely/not/here"));
 }
+
+/// P-62:协议和隐私政策的段落列表由 App 提供:段数对、标题非空(签名段除外)、正文非空、跟着界面语言变。
+#[test]
+fn p62_document_sections_come_from_the_app_and_follow_the_language() {
+    let mut app = ready_app(vec![]);
+    let agreement = app.agreement_sections();
+    assert_eq!(agreement.len(), 8, "p0..p6 plus the signature");
+    assert!(
+        agreement[..7]
+            .iter()
+            .all(|(h, b)| !h.is_empty() && !b.is_empty())
+    );
+    assert!(
+        agreement[7].0.is_empty() && !agreement[7].1.is_empty(),
+        "signature has no heading"
+    );
+    let privacy = app.privacy_sections();
+    assert_eq!(privacy.len(), 6);
+    assert!(privacy.iter().all(|(h, b)| !h.is_empty() && !b.is_empty()));
+    // 没有漏翻的键(翻译函数找不到键时会原样返回键名)
+    assert!(
+        agreement
+            .iter()
+            .chain(&privacy)
+            .all(|(h, b)| !h.contains("disclaimer.") && !b.contains("privacy."))
+    );
+    // 跟着语言变:换成没有这些键的语言,回落到英文,段落不变;换 lang 字段后重新取
+    app.lang = "en".into();
+    assert_eq!(app.privacy_sections(), privacy);
+}

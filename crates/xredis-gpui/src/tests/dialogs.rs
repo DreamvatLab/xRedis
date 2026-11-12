@@ -520,11 +520,18 @@ fn delete_asks_first_and_only_the_ok_button_deletes(cx: &mut gpui_kit::TestAppCo
 }
 
 #[gpui_kit::test]
-fn enter_confirms_the_delete(cx: &mut gpui_kit::TestAppContext) {
+fn enter_does_not_confirm_the_delete(cx: &mut gpui_kit::TestAppContext) {
     let (env, ids) = setup(cx, &["a"]);
     dispatch(cx, &env, Msg::DeleteRequested(ids[0]));
     press(cx, &env, "enter");
-    wait(cx, &env, "deleted", |a| a.connections.is_empty());
+    assert_eq!(open_dialogs(cx, &env), vec![DialogKind::Confirm]);
+    assert!(read(cx, &env, |a| a.confirm.is_some()));
+    assert_eq!(env.fake.store().connections().len(), 1);
+    assert_eq!(read(cx, &env, |a| a.connections.len()), 1);
+    // Esc 仍然取消
+    press(cx, &env, "escape");
+    assert!(open_dialogs(cx, &env).is_empty());
+    assert_eq!(env.fake.store().connections().len(), 1);
 }
 
 // ---------------------------------------------------------------- 错误框

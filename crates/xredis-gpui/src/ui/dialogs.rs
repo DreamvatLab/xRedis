@@ -142,7 +142,8 @@ impl MainView {
             }
             DialogKind::Confirm => (
                 420.,
-                Some(|| Msg::ConfirmAccepted),
+                // 回车不确认删除(v1 的确认框回车不起作用):只有点按钮才删,Esc 取消
+                None,
                 Some(|| Msg::ConfirmCancelled),
                 notice(cx),
                 None,

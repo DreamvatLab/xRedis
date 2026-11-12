@@ -191,6 +191,32 @@ impl App {
         tr_with(&self.lang, key, args)
     }
 
+    /// 免责协议的段落:`(标题, 正文)`,已按界面语言翻译。最后一段是签名,没有标题。
+    pub fn agreement_sections(&self) -> Vec<(String, String)> {
+        (0..=6)
+            .map(|i| {
+                (
+                    self.t(&format!("disclaimer.p{i}_title")),
+                    self.t(&format!("disclaimer.p{i}")),
+                )
+            })
+            .chain([(String::new(), self.t("disclaimer.signature"))])
+            .collect()
+    }
+
+    /// 隐私政策的段落:`(标题, 正文)`,已按界面语言翻译。
+    pub fn privacy_sections(&self) -> Vec<(String, String)> {
+        ["intro", "data", "storage", "security", "updates", "contact"]
+            .iter()
+            .map(|k| {
+                (
+                    self.t(&format!("privacy.{k}_title")),
+                    self.t(&format!("privacy.{k}")),
+                )
+            })
+            .collect()
+    }
+
     pub fn agreed(&self) -> bool {
         self.settings.agreement == AGREEMENT_VERSION
     }

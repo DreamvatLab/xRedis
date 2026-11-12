@@ -18,9 +18,11 @@ use gpui_kit::*;
 use xredis_app::Msg;
 use xredis_app::keylist::KeysMsg;
 use xredis_app::keyview::ViewMsg;
+use xredis_app::keyview::table::TableMsg;
 
 use super::editor_dialog::EditorBody;
 use super::key_dialogs::{KeyInputBody, dialog_of};
+use super::members::MemberEditorBody;
 use super::notice_dialogs::NoticeBody;
 use super::settings_dialog::SettingsBody;
 use crate::model::MainView;
@@ -35,13 +37,15 @@ pub enum DialogKind {
     PasteKeys,
     Rename,
     Ttl,
+    MemberEditor,
+    DeleteMembers,
     Confirm,
     Error,
 }
 
 impl DialogKind {
     /// 同时开着时从下到上的顺序。
-    pub const ALL: [DialogKind; 10] = [
+    pub const ALL: [DialogKind; 12] = [
         DialogKind::Agreement,
         DialogKind::Privacy,
         DialogKind::Settings,
@@ -50,6 +54,8 @@ impl DialogKind {
         DialogKind::PasteKeys,
         DialogKind::Rename,
         DialogKind::Ttl,
+        DialogKind::MemberEditor,
+        DialogKind::DeleteMembers,
         DialogKind::Confirm,
         DialogKind::Error,
     ];
@@ -78,6 +84,18 @@ impl MainView {
             DialogKind::Rename | DialogKind::Ttl => app
                 .active
                 .is_some_and(|id| dialog_of(app, id, kind).is_some()),
+            DialogKind::MemberEditor => app.active_tab().is_some_and(|t| {
+                t.view
+                    .as_ref()
+                    .and_then(|v| v.editor.as_ref())
+                    .is_some_and(|e| !e.is_key_level())
+            }),
+            DialogKind::DeleteMembers => app.active_tab().is_some_and(|t| {
+                t.view
+                    .as_ref()
+                    .and_then(|v| v.table.as_ref())
+                    .is_some_and(|t| t.confirm_delete.is_some())
+            }),
             DialogKind::Confirm => app.confirm.is_some(),
             DialogKind::Error => app.error_dialog.is_some(),
         }
@@ -217,6 +235,34 @@ impl MainView {
                     Some(first),
                 )
             }
+            // 成员编辑器:Esc 关;回车不绑(值输入框里回车是换行),保存点按钮
+            DialogKind::MemberEditor => {
+                let Some(id) = self.app.active else { return };
+                let body = cx.new(|cx| MemberEditorBody::new(main.clone(), id, cx));
+                (
+                    640.,
+                    None,
+                    key(move || Msg::View {
+                        id,
+                        msg: ViewMsg::CloseEditor,
+                    }),
+                    body.into(),
+                    None,
+                )
+            }
+            // 破坏性确认:回车不起作用,Esc 取消
+            DialogKind::DeleteMembers => (
+                420.,
+                None,
+                self.app.active.and_then(|id| {
+                    key(move || Msg::View {
+                        id,
+                        msg: ViewMsg::Table(TableMsg::CancelDelete),
+                    })
+                }),
+                notice(cx),
+                None,
+            ),
             DialogKind::Confirm => (
                 420.,
                 // 回车不确认删除(v1 的确认框回车不起作用):只有点按钮才删,Esc 取消
@@ -328,7 +374,7 @@ pub(super) fn bind_input<T: 'static>(
 
 /// 带标签的一行。`id` 让无头测试能找到并点进输入框。
 pub(super) fn field(
-    id: &'static str,
+    id: impl Into<ElementId>,
     label: String,
     input: &Entity<InputState>,
 ) -> impl IntoElement {

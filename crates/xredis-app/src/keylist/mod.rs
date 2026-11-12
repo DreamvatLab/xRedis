@@ -207,11 +207,7 @@ impl KeyRow {
     /// TTL 列的文字(秒):-1 永不过期、-2 已不存在,和 Redis 的返回值一致,v1 也是直接显示数字。
     /// 没加载是 `None`(L-16:-1 是合法值,不能拿它表示没加载)。
     pub fn ttl_text(&self) -> Option<String> {
-        self.ttl().map(|t| match t {
-            Ttl::Missing => "-2".to_string(),
-            Ttl::Persistent => "-1".to_string(),
-            Ttl::Seconds(n) => n.to_string(),
-        })
+        self.ttl().map(ttl_text)
     }
 
     /// TTL 为 -2:这个 key 已经不存在了(P-14)。
@@ -244,6 +240,15 @@ pub fn type_label(kind: Option<&KeyType>) -> &'static str {
         Some(KeyType::ZSet) => "ZSet",
         Some(KeyType::Stream) => "Stream",
         _ => "None",
+    }
+}
+
+/// TTL 的文字(秒):-1 永不过期、-2 已不存在,和 Redis 的返回值一致。key 列表和打开的 key 共用。
+pub fn ttl_text(ttl: Ttl) -> String {
+    match ttl {
+        Ttl::Missing => "-2".to_string(),
+        Ttl::Persistent => "-1".to_string(),
+        Ttl::Seconds(n) => n.to_string(),
     }
 }
 

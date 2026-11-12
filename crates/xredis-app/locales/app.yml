@@ -493,6 +493,26 @@ view.binary_readonly:
   en: "This value contains binary data and is shown read-only. Use the hex view to inspect it."
 view.truncated_readonly:
   en: "This value is %{size}. Only the first %{shown} are shown, read-only."
+view.format.plain:
+  en: "Plain text"
+view.hex_truncated:
+  en: "Hex view: only the first %{shown} are shown, of %{total}."
+view.member.edit:
+  en: "Edit member"
+view.member.new:
+  en: "New member"
+view.members.empty:
+  en: "No members"
+view.members.delete_title:
+  en: "Delete members"
+view.members.delete_body:
+  en: "Are you sure to delete %{count} selected member(s) of '%{key}'?"
+view.members.add:
+  en: "Add"
+view.members.search_placeholder:
+  en: "Match pattern, e.g. user*"
+view.members.filter_placeholder:
+  en: "Filter"
 view.title.new:
   en: "New %{type}"
 view.key_name:

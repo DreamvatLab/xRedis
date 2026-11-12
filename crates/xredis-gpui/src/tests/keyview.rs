@@ -18,7 +18,7 @@ use super::dialogs::{open_dialogs, press, type_into};
 use super::{Env, click, dispatch, exists, is_ready, read, setup, wait};
 use crate::ui::DialogKind;
 
-fn open_tab(cx: &mut TestAppContext, env: &Env, id: ConnId) {
+pub(super) fn open_tab(cx: &mut TestAppContext, env: &Env, id: ConnId) {
     dispatch(cx, env, Msg::OpenConnection(id));
     wait(cx, env, "keys loaded", |a| {
         is_ready(a)
@@ -39,7 +39,12 @@ fn open_key(cx: &mut TestAppContext, env: &Env, id: ConnId, row: usize) {
     cx.run_until_parked();
 }
 
-fn editor<R>(cx: &mut TestAppContext, env: &Env, id: ConnId, f: impl FnOnce(&Editor) -> R) -> R {
+pub(super) fn editor<R>(
+    cx: &mut TestAppContext,
+    env: &Env,
+    id: ConnId,
+    f: impl FnOnce(&Editor) -> R,
+) -> R {
     read(cx, env, |a| {
         f(a.tab(id)
             .unwrap()
@@ -52,7 +57,7 @@ fn editor<R>(cx: &mut TestAppContext, env: &Env, id: ConnId, f: impl FnOnce(&Edi
     })
 }
 
-fn view_open(cx: &mut TestAppContext, env: &Env, id: ConnId) -> bool {
+pub(super) fn view_open(cx: &mut TestAppContext, env: &Env, id: ConnId) -> bool {
     read(cx, env, |a| a.tab(id).unwrap().view.is_some())
 }
 
@@ -61,7 +66,7 @@ fn texts(cx: &mut TestAppContext, env: &Env, id: ConnId) -> (String, String, Str
     cx.read(|cx| env.view.read(cx).form_texts(id, cx).expect("a form"))
 }
 
-fn send(cx: &mut TestAppContext, env: &Env, id: ConnId, msg: ViewMsg) {
+pub(super) fn send(cx: &mut TestAppContext, env: &Env, id: ConnId, msg: ViewMsg) {
     dispatch(cx, env, Msg::View { id, msg });
     cx.run_until_parked();
 }

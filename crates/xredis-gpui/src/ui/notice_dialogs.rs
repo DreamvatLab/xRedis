@@ -9,6 +9,8 @@ use gpui_kit::*;
 use xredis_app::Msg;
 use xredis_app::app::Confirm;
 use xredis_app::keylist::KeysMsg;
+use xredis_app::keyview::ViewMsg;
+use xredis_app::keyview::table::TableMsg;
 
 use super::dialogs::DialogKind;
 use super::send_to;
@@ -279,9 +281,52 @@ impl Render for NoticeBody {
                     )
                     .into_any_element()
             }
-            DialogKind::Settings | DialogKind::Editor | DialogKind::Rename | DialogKind::Ttl => {
-                div().into_any_element()
+            DialogKind::DeleteMembers => {
+                let Some((id, view, count)) = app.active.and_then(|id| {
+                    let view = app.tab(id)?.view.as_ref()?;
+                    Some((id, view, view.table.as_ref()?.confirm_delete?))
+                }) else {
+                    return div().into_any_element();
+                };
+                root.id("members-delete-confirm")
+                    .test_support()
+                    .child(title(t("view.members.delete_title")))
+                    .child(
+                        div()
+                            .id("members-delete-body")
+                            .test_support()
+                            .child(app.t_with(
+                                "view.members.delete_body",
+                                &[("count", &count.to_string()), ("key", &view.title_key())],
+                            )),
+                    )
+                    .child(
+                        footer()
+                            .child(
+                                Button::new("members-delete-cancel")
+                                    .label(t("btn.cancel"))
+                                    .on_click(send_to(&main, move || Msg::View {
+                                        id,
+                                        msg: ViewMsg::Table(TableMsg::CancelDelete),
+                                    })),
+                            )
+                            .child(
+                                Button::new("members-delete-ok")
+                                    .danger()
+                                    .label(t("btn.delete"))
+                                    .on_click(send_to(&main, move || Msg::View {
+                                        id,
+                                        msg: ViewMsg::Table(TableMsg::ConfirmDelete),
+                                    })),
+                            ),
+                    )
+                    .into_any_element()
             }
+            DialogKind::Settings
+            | DialogKind::Editor
+            | DialogKind::Rename
+            | DialogKind::Ttl
+            | DialogKind::MemberEditor => div().into_any_element(),
         }
     }
 }

@@ -55,6 +55,9 @@ pub fn hex_dump(bytes: &[u8]) -> String {
     out
 }
 
+/// 十六进制视图最多转储的字节数(前 64 KiB,4096 行)。
+pub const HEX_DUMP_LIMIT: usize = 64 * 1024;
+
 /// 编辑器的语法类型。v2.0 只认 JSON,其余当纯文本(设计文档「有意差别」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Format {
@@ -67,11 +70,11 @@ impl Format {
     /// 语言下拉的选项(v2.0 只有这两种,设计文档「有意差别」)。
     pub const ALL: [Format; 2] = [Format::Plain, Format::Json];
 
-    /// 下拉里显示的名字(专有名词,不翻译)。
-    pub fn label(self) -> &'static str {
+    /// 下拉里显示的名字:“纯文本”要翻译,“JSON”是专有名词。
+    pub fn label(self, lang: &str) -> String {
         match self {
-            Format::Plain => "Plain text",
-            Format::Json => "JSON",
+            Format::Plain => crate::i18n::tr(lang, "view.format.plain"),
+            Format::Json => "JSON".to_owned(),
         }
     }
 }

@@ -16,6 +16,7 @@ use super::display::{Format, detect_format, format_json, hex_dump, is_lossy, min
 use super::editor::{Editor, FormError, Target};
 use super::table::{MemberColumn, ScanState, TableMsg};
 use super::*;
+use crate::errors::human_bytes;
 use crate::keylist::SortDir;
 
 fn b(s: &str) -> Bytes {
@@ -1654,8 +1655,8 @@ fn the_view_gives_its_title_and_the_header_texts() {
 #[test]
 fn the_languages_to_choose_from() {
     assert_eq!(Format::ALL, [Format::Plain, Format::Json]);
-    assert_eq!(Format::Plain.label(), "Plain text");
-    assert_eq!(Format::Json.label(), "JSON");
+    assert_eq!(Format::Plain.label("en"), "Plain text");
+    assert_eq!(Format::Json.label("en"), "JSON");
 }
 
 #[test]
@@ -1688,4 +1689,199 @@ fn rename_and_ttl_are_not_offered_while_creating_or_writing() {
             ttl: false
         }
     );
+}
+
+#[test]
+fn one_function_turns_a_ttl_into_text() {
+    use crate::keylist::ttl_text;
+    assert_eq!(ttl_text(Ttl::Persistent), "-1");
+    assert_eq!(ttl_text(Ttl::Missing), "-2");
+    assert_eq!(ttl_text(Ttl::Seconds(90)), "90");
+}
+
+/// 十六进制只转储前 64 KiB,超出时只读提示说明"只显示前 64 KiB,共 N"。
+#[test]
+fn the_hex_view_dumps_at_most_64_kib_and_says_so() {
+    use super::display::HEX_DUMP_LIMIT;
+    assert_eq!(HEX_DUMP_LIMIT, 64 * 1024);
+    let data = vec![0xabu8; HEX_DUMP_LIMIT + 10];
+    let mut e = string_editor("k", &data);
+    e.hex = true;
+    let dump = e.hex_text();
+    assert_eq!(dump.lines().count(), HEX_DUMP_LIMIT / 16, "4096 lines");
+    let notice = e.notice("en").expect("a notice");
+    assert!(
+        notice.contains("64.0 KiB") && notice.contains(&human_bytes(data.len() as u64)),
+        "{notice}"
+    );
+    // 不在十六进制视图里:没有这条提示(值是文本,可编辑)
+    let mut text = string_editor("k", &vec![b'a'; HEX_DUMP_LIMIT + 10]);
+    assert_eq!(text.notice("en"), None);
+    text.hex = true;
+    assert!(text.notice("en").is_some());
+    // 刚好 64 KiB:不截断,没有提示
+    let mut exact = string_editor("k", &vec![b'a'; HEX_DUMP_LIMIT]);
+    exact.hex = true;
+    assert_eq!(exact.notice("en"), None);
+    assert_eq!(exact.hex_text().lines().count(), HEX_DUMP_LIMIT / 16);
+}
+
+// ---- R-10b:成员表给界面的查询 ----
+
+#[test]
+fn member_rows_come_ready_to_draw() {
+    use super::table::MemberRow;
+    // Hash:名字加值;二进制的名字或值标出来
+    let (mut h, out) = H::open("用户", KeyType::Hash);
+    let (sg, _) = scans(&out)[0];
+    h.batch(
+        sg,
+        vec![
+            hash_row("名", "值"),
+            Member::Hash {
+                field: binary(),
+                value: b("x"),
+            },
+        ],
+        0,
+    );
+    h.send(ViewMsg::Table(TableMsg::Select {
+        name: b("名"),
+        on: true,
+    }));
+    let t = h.view.table.as_ref().unwrap();
+    let r0 = t.view_row(0).unwrap();
+    assert_eq!(
+        r0,
+        MemberRow {
+            name: b("名"),
+            name_text: "名".into(),
+            value_text: Some("值".into()),
+            binary: false,
+            selected: true,
+        }
+    );
+    let r1 = t.view_row(1).unwrap();
+    assert!(r1.binary && !r1.selected && r1.name_text.contains('\u{fffd}'));
+    assert!(t.view_row(2).is_none());
+
+    // List 用下标;Set 没有值列;ZSet 的值列是分数
+    let (mut h, out) = H::open("列表", KeyType::List);
+    let (sg, _) = scans(&out)[0];
+    h.batch(
+        sg,
+        vec![Member::List {
+            index: 3,
+            value: b("v"),
+        }],
+        0,
+    );
+    let r = h.view.table.as_ref().unwrap().view_row(0).unwrap();
+    assert_eq!(
+        (r.name_text.as_str(), r.value_text.as_deref()),
+        ("3", Some("v"))
+    );
+    let (mut h, out) = H::open("集合", KeyType::Set);
+    let (sg, _) = scans(&out)[0];
+    h.batch(sg, vec![Member::Set { member: b("m") }], 0);
+    let r = h.view.table.as_ref().unwrap().view_row(0).unwrap();
+    assert_eq!((r.name_text.as_str(), r.value_text), ("m", None));
+    let (mut h, out) = H::open("榜", KeyType::ZSet);
+    let (sg, _) = scans(&out)[0];
+    h.batch(
+        sg,
+        vec![Member::ZSet {
+            member: b("a"),
+            score: 1.5,
+        }],
+        0,
+    );
+    let r = h.view.table.as_ref().unwrap().view_row(0).unwrap();
+    assert_eq!(r.value_text.as_deref(), Some("1.5"));
+}
+
+#[test]
+fn all_filtered_selected_follows_the_selection() {
+    let (mut h, out) = H::open("用户", KeyType::Hash);
+    let (sg, _) = scans(&out)[0];
+    h.batch(sg, hash_rows(2), 0);
+    assert!(!h.view.table.as_ref().unwrap().all_filtered_selected());
+    h.send(ViewMsg::Table(TableMsg::SelectAllFiltered(true)));
+    assert!(h.view.table.as_ref().unwrap().all_filtered_selected());
+    h.send(ViewMsg::Table(TableMsg::Select {
+        name: b("字段0"),
+        on: false,
+    }));
+    assert!(!h.view.table.as_ref().unwrap().all_filtered_selected());
+    // 没有行时不算全选
+    let (h2, _) = H::open("空", KeyType::Hash);
+    assert!(!h2.view.table.as_ref().unwrap().all_filtered_selected());
+}
+
+#[test]
+fn the_member_toolbar_buttons_follow_the_scan_selection_and_writes() {
+    let (mut h, out) = H::open("用户", KeyType::Hash);
+    let (sg, _) = scans(&out)[0];
+    // 扫描中:只有 Stop,不能新增和删除
+    let a = h.view.member_actions().unwrap();
+    assert!(
+        !a.search && !a.more && !a.all && a.stop && !a.add && !a.delete,
+        "{a:?}"
+    );
+    // 扫完、还有更多、没选中
+    h.batch(sg, hash_rows(2), 2);
+    h.batch(sg, hash_rows(4)[2..].to_vec(), 4);
+    let a = h.view.member_actions().unwrap();
+    assert!(
+        a.search && a.more && a.all && !a.stop && a.add && !a.delete,
+        "{a:?}"
+    );
+    // 选中后可以删除
+    h.send(ViewMsg::Table(TableMsg::SelectAllFiltered(true)));
+    assert!(h.view.member_actions().unwrap().delete);
+    // 删除在途:不能再新增和删除
+    h.send(ViewMsg::Table(TableMsg::DeleteSelected));
+    h.send(ViewMsg::Table(TableMsg::ConfirmDelete));
+    let a = h.view.member_actions().unwrap();
+    assert!(!a.add && !a.delete, "{a:?}");
+    // String 没有成员表
+    let (s, _) = H::open("文章", KeyType::String);
+    assert!(s.view.member_actions().is_none());
+}
+
+#[test]
+fn the_member_status_texts_come_from_the_app() {
+    let (mut h, out) = H::open("用户", KeyType::Hash);
+    let (sg, _) = scans(&out)[0];
+    h.details(KeyType::Hash, 8, Ttl::Persistent);
+    h.batch(sg, hash_rows(2), 2);
+    h.batch(sg, hash_rows(4)[2..].to_vec(), 4);
+    let s = h.view.member_status("en").unwrap();
+    assert_eq!(s.loaded, "Loaded 4 / 8");
+    assert_eq!(s.percent.as_deref(), Some("50.00%"));
+    assert!(s.more_hint.is_some());
+    assert_eq!(s.filtered, None);
+    h.send(ViewMsg::Table(TableMsg::SetFilter("字段1".into())));
+    h.send(ViewMsg::Table(TableMsg::Search));
+    let s = h.view.member_status("en").unwrap();
+    assert_eq!(s.loaded, "Loaded 0 / 8");
+    assert!(h.view.member_status("en").is_some());
+}
+
+#[test]
+fn each_opened_editor_gets_a_new_sequence_number_and_a_title() {
+    let (mut h, out) = H::open("用户", KeyType::Hash);
+    let (sg, _) = scans(&out)[0];
+    h.batch(sg, hash_rows(2), 0);
+    let s0 = h.view.editor_seq();
+    h.send(ViewMsg::OpenMember(b("字段0")));
+    let s1 = h.view.editor_seq();
+    assert_ne!(s0, s1);
+    assert_eq!(h.view.editor_title("en").as_deref(), Some("Edit member"));
+    h.send(ViewMsg::CloseEditor);
+    h.send(ViewMsg::NewMember);
+    assert_ne!(h.view.editor_seq(), s1);
+    assert_eq!(h.view.editor_title("en").as_deref(), Some("New member"));
+    h.send(ViewMsg::CloseEditor);
+    assert_eq!(h.view.editor_title("en"), None);
 }

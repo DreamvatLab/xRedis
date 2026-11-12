@@ -9271,6 +9271,7 @@ name = "xredis-gpui"
 version = "2.0.0-dev"
 dependencies = [
  "async-channel",
+ "bytes",
  "gpui-kit",
  "tempfile",
  "tracing",

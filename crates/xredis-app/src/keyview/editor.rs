@@ -11,7 +11,9 @@ use xredis_core::types::string::SetMode;
 
 use std::borrow::Cow;
 
-use super::display::{Format, Shown, detect_format, format_json, hex_dump, minify_json, show};
+use super::display::{
+    Format, HEX_DUMP_LIMIT, Shown, detect_format, format_json, hex_dump, minify_json, show,
+};
 use crate::errors::human_bytes;
 use crate::i18n::{tr, tr_with};
 
@@ -266,7 +268,8 @@ impl Editor {
 
     /// 值是不是在显示十六进制:十六进制只读,GUI 此时不接受输入。
     pub fn hex_text(&self) -> String {
-        hex_dump(self.value.orig())
+        let orig = self.value.orig();
+        hex_dump(&orig[..orig.len().min(HEX_DUMP_LIMIT)])
     }
 
     pub fn actions(&self) -> EditorActions {
@@ -298,6 +301,24 @@ impl Editor {
         if self.is_new() {
             return None;
         }
+        let hex_cut = (self.hex && self.value.orig().len() > HEX_DUMP_LIMIT).then(|| {
+            tr_with(
+                lang,
+                "view.hex_truncated",
+                &[
+                    ("shown", &human_bytes(HEX_DUMP_LIMIT as u64)),
+                    ("total", &human_bytes(self.value.orig().len() as u64)),
+                ],
+            )
+        });
+        let readonly = self.readonly_notice(lang);
+        match (readonly, hex_cut) {
+            (Some(a), Some(b)) => Some(format!("{a} {b}")),
+            (a, b) => a.or(b),
+        }
+    }
+
+    fn readonly_notice(&self, lang: &str) -> Option<String> {
         if let Some(total) = self.truncated {
             return Some(tr_with(
                 lang,

@@ -9,6 +9,7 @@ use xredis_core::keys::KeyType;
 use xredis_core::members::{Member, MemberOp, MemberPage, WriteOp};
 
 use super::display::show;
+use crate::i18n::{tr, tr_with};
 use crate::keylist::{SortDir, VIEW_REFRESH_MS};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +33,39 @@ pub enum MemberColumn {
 pub struct MemberSort {
     pub column: MemberColumn,
     pub dir: SortDir,
+}
+
+/// 成员表的一行,可以直接画(名字和值已转成文字,二进制标出来)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberRow {
+    /// 选中、点开用的名字(字节)。
+    pub name: Bytes,
+    pub name_text: String,
+    /// Set 没有值列。ZSet 的值是分数。
+    pub value_text: Option<String>,
+    /// 名字或值含无法解码的字节(有损显示,编辑器只读,但可以删除)。
+    pub binary: bool,
+    pub selected: bool,
+}
+
+/// 成员表工具栏和底部按钮现在能不能点。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemberActions {
+    pub search: bool,
+    pub more: bool,
+    pub all: bool,
+    pub stop: bool,
+    pub add: bool,
+    pub delete: bool,
+}
+
+/// 底部状态文字,都已翻译。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberStatus {
+    pub loaded: String,
+    pub percent: Option<String>,
+    pub more_hint: Option<String>,
+    pub filtered: Option<String>,
 }
 
 /// 用户在成员表上的操作和异步结果。
@@ -160,6 +194,76 @@ impl MemberTable {
 
     pub fn view_len(&self) -> usize {
         self.view.len()
+    }
+
+    /// 过滤排序后的第 `ix` 行,画虚拟列表用。
+    pub fn view_row(&self, ix: usize) -> Option<MemberRow> {
+        let m = &self.rows[*self.view.get(ix)?];
+        let (name, value) = match m {
+            Member::Hash { field, value } => (field.clone(), Some(value.clone())),
+            Member::List { value, .. } => (m.name(), Some(value.clone())),
+            Member::Set { member } => (member.clone(), None),
+            Member::ZSet { member, score } => {
+                (member.clone(), Some(Bytes::from(score.to_string())))
+            }
+        };
+        let shown = show(&name);
+        let value_shown = value.as_ref().map(|v| show(v));
+        Some(MemberRow {
+            selected: self.selected.contains(&m.name()),
+            name,
+            binary: shown.lossy || value_shown.as_ref().is_some_and(|v| v.lossy),
+            name_text: shown.text,
+            value_text: value_shown.map(|v| v.text),
+        })
+    }
+
+    /// 过滤后的行都选中了(没有行不算)。
+    pub fn all_filtered_selected(&self) -> bool {
+        !self.view.is_empty()
+            && self
+                .view
+                .iter()
+                .all(|&i| self.selected.contains(&self.rows[i].name()))
+    }
+
+    pub fn actions(&self, writing: bool) -> MemberActions {
+        let idle = !self.is_scanning();
+        MemberActions {
+            search: idle,
+            more: idle && self.has_more(),
+            all: idle && self.has_more(),
+            stop: matches!(self.scan, ScanState::Searching | ScanState::LoadingAll),
+            add: idle && !writing,
+            delete: idle && !writing && !self.selected.is_empty(),
+        }
+    }
+
+    pub fn status(&self, lang: &str) -> MemberStatus {
+        let loaded_n = self.rows.len().to_string();
+        let loaded = match self.length {
+            Some(t) => tr_with(
+                lang,
+                "keys.status.loaded_of",
+                &[("loaded", &loaded_n), ("total", &t.to_string())],
+            ),
+            None => tr_with(lang, "keys.status.loaded", &[("loaded", &loaded_n)]),
+        };
+        MemberStatus {
+            loaded,
+            percent: self
+                .length
+                .filter(|t| *t > 0)
+                .map(|_| format!("{:.2}%", self.loaded_percent())),
+            more_hint: self.has_more().then(|| tr(lang, "keys.status.more_hint")),
+            filtered: (self.view.len() != self.rows.len()).then(|| {
+                tr_with(
+                    lang,
+                    "keys.status.shown",
+                    &[("shown", &self.view.len().to_string())],
+                )
+            }),
+        }
     }
 
     pub fn find(&self, name: &Bytes) -> Option<&Member> {

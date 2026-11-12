@@ -28,7 +28,7 @@ pub(crate) fn view_msg(id: ConnId, msg: ViewMsg) -> Msg {
 }
 
 /// 输入控件的事件可能在 `MainView` 自己的更新里触发(这时不能再 `update` 它):推迟到更新之后发。
-fn defer_dispatch(main: &Entity<MainView>, msg: Msg, window: &mut Window, cx: &mut App) {
+pub(super) fn defer_dispatch(main: &Entity<MainView>, msg: Msg, window: &mut Window, cx: &mut App) {
     let main = main.clone();
     window.defer(cx, move |window, cx| {
         main.update(cx, |this, cx| this.dispatch(msg, window, cx));
@@ -136,47 +136,64 @@ impl EditorForm {
     }
 }
 
-/// 每个 Tab 一份:当前视图(用代号区分)的编辑器控件。
+/// 每个 Tab 一份:当前视图(用代号区分)的输入控件。
 pub(crate) struct ViewUi {
     generation: u64,
-    form: EditorForm,
+    /// String 和新建 key 的页面编辑器。
+    pub(crate) page: Option<EditorForm>,
+    /// 成员编辑器弹窗里的控件,带编辑器的序号(`KeyView::editor_seq`),换了编辑器就重建。
+    pub(crate) member: Option<(u64, EditorForm)>,
+    /// 成员表的搜索框、过滤框和滚动位置。
+    pub(crate) table: Option<super::members::TableUi>,
 }
 
 pub(crate) type ViewUiMap = std::collections::HashMap<ConnId, ViewUi>;
 
 impl MainView {
-    /// 让每个 Tab 的页面编辑器控件和 `App` 里的视图一致:开了就建,换了就重建,关了就释放。
+    /// 让每个 Tab 的输入控件和 `App` 里的视图一致:开了就建,换了就重建,关了就释放。
     pub(crate) fn sync_view_ui(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let main = cx.entity();
         let app = &self.app;
         let ui = &mut self.view_ui;
-        let wanted: Vec<ConnId> = app
-            .tabs
-            .iter()
-            .filter(|t| {
-                t.view
-                    .as_ref()
-                    .and_then(|v| v.editor.as_ref())
-                    .is_some_and(Editor::is_key_level)
-            })
-            .map(|t| t.id)
-            .collect();
-        ui.retain(|id, _| wanted.contains(id));
-        for id in wanted {
-            let Some((view, editor)) = app
-                .tab(id)
+        ui.retain(|id, u| {
+            app.tab(*id)
                 .and_then(|t| t.view.as_ref())
-                .and_then(|v| Some((v, v.editor.as_ref()?)))
-            else {
-                continue;
-            };
-            let generation = view.generation();
-            match ui.get_mut(&id) {
-                Some(u) if u.generation == generation => u.form.sync(editor, window, cx),
-                _ => {
-                    let form = EditorForm::new(&main, id, editor, window, cx);
-                    ui.insert(id, ViewUi { generation, form });
-                }
+                .is_some_and(|v| v.generation() == u.generation)
+        });
+        for tab in &app.tabs {
+            let id = tab.id;
+            let Some(view) = &tab.view else { continue };
+            let u = ui.entry(id).or_insert_with(|| ViewUi {
+                generation: view.generation(),
+                page: None,
+                member: None,
+                table: None,
+            });
+            let editor = view.editor.as_ref();
+            // 页面编辑器
+            match editor.filter(|e| e.is_key_level()) {
+                Some(e) => match &mut u.page {
+                    Some(form) => form.sync(e, window, cx),
+                    None => u.page = Some(EditorForm::new(&main, id, e, window, cx)),
+                },
+                None => u.page = None,
+            }
+            // 成员编辑器弹窗
+            match editor.filter(|e| !e.is_key_level()) {
+                Some(e) => match &mut u.member {
+                    Some((seq, form)) if *seq == view.editor_seq() => form.sync(e, window, cx),
+                    _ => {
+                        u.member =
+                            Some((view.editor_seq(), EditorForm::new(&main, id, e, window, cx)))
+                    }
+                },
+                None => u.member = None,
+            }
+            // 成员表
+            if view.table.is_some() && u.table.is_none() {
+                u.table = Some(super::members::TableUi::new(
+                    &main, id, &self.app, window, cx,
+                ));
             }
         }
     }
@@ -188,33 +205,29 @@ impl MainView {
         view: &KeyView,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        match (&view.editor, self.view_ui.get(&id)) {
-            (Some(editor), Some(ui)) if editor.is_key_level() => {
-                self.render_key_editor(id, view, editor, &ui.form, cx)
+        let ui = self.view_ui.get(&id);
+        match (&view.editor, ui.and_then(|u| u.page.as_ref())) {
+            (Some(editor), Some(form)) if editor.is_key_level() => {
+                self.render_key_editor(id, view, editor, form, cx)
             }
-            // 成员表(R-10b)
             _ => self.render_members_page(id, view, cx),
         }
     }
 
-    fn render_key_editor(
+    /// 页面顶部:标题、长度、TTL、Rename 和 TTL 按钮(String 编辑器和成员表共用)。
+    pub(crate) fn render_view_header(
         &self,
         id: ConnId,
         view: &KeyView,
-        editor: &Editor,
-        form: &EditorForm,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> Div {
         let theme = cx.theme().clone();
         let t = |k: &str| self.app.t(k);
         let lang = &self.app.lang;
-        let inputs = editor.inputs();
-        let actions = editor.actions();
         let view_actions = view.actions();
         let creating = view.is_creating();
         let dash = || "-".to_string();
-
-        let header = h_flex()
+        h_flex()
             .gap_3()
             .items_center()
             .child(
@@ -269,21 +282,61 @@ impl MainView {
                         .disabled(!view_actions.ttl)
                         .on_click(send(cx, move || view_msg(id, ViewMsg::OpenTtl))),
                 )
-            });
+            })
+    }
 
+    fn render_key_editor(
+        &self,
+        id: ConnId,
+        view: &KeyView,
+        editor: &Editor,
+        form: &EditorForm,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let header = self.render_view_header(id, view, cx);
+        let body = self.render_editor_body("string", id, editor, form, cx);
+        v_flex()
+            .id("keyview")
+            .test_support()
+            .flex_1()
+            .min_h_0()
+            .gap_2()
+            .child(header)
+            .child(body)
+            .into_any_element()
+    }
+}
+
+impl MainView {
+    /// 编辑器的主体(页面里的 String 编辑器和成员编辑器弹窗共用):key 名、成员名、头插尾插、
+    /// 工具栏、只读提示、值、Undo 和 Cancel 和 Save。控件 id 以 `prefix` 开头(页面 `string`,弹窗 `member`)。
+    pub(crate) fn render_editor_body(
+        &self,
+        prefix: &'static str,
+        id: ConnId,
+        editor: &Editor,
+        form: &EditorForm,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let theme = cx.theme().clone();
+        let t = |k: &str| self.app.t(k);
+        let lang = &self.app.lang;
+        let inputs = editor.inputs();
+        let actions = editor.actions();
         // 语言下拉:v2.0 只有纯文本和 JSON,选择只影响 Format、Minify 能不能用
         let view_entity = cx.entity();
         let current = editor.format;
-        let language = Button::new("string-language")
+        let lang_owned = lang.to_string();
+        let language = Button::new(SharedString::from(format!("{prefix}-language")))
             .compact()
-            .label(current.label())
+            .label(current.label(lang))
             .icon(IconName::ChevronDown)
             .tooltip(t("view.language"))
             .dropdown_menu(move |menu, _, _| {
                 let mut menu = menu;
                 for f in Format::ALL {
                     menu = menu.item(
-                        PopupMenuItem::new(f.label())
+                        PopupMenuItem::new(f.label(&lang_owned))
                             .checked(f == current)
                             .on_click(super::send_to(&view_entity, move || {
                                 view_msg(id, ViewMsg::SetFormat(f))
@@ -294,27 +347,27 @@ impl MainView {
             });
         let hex_on = editor.hex;
         let toolbar = h_flex()
-            .id("string-toolbar")
+            .id(SharedString::from(format!("{prefix}-toolbar")))
             .test_support()
             .gap_2()
             .items_center()
             .child(language)
             .child(
-                Button::new("string-format")
+                Button::new(SharedString::from(format!("{prefix}-format")))
                     .compact()
                     .label(t("view.btn.format"))
                     .disabled(!actions.format)
                     .on_click(send(cx, move || view_msg(id, ViewMsg::FormatJson))),
             )
             .child(
-                Button::new("string-minify")
+                Button::new(SharedString::from(format!("{prefix}-minify")))
                     .compact()
                     .label(t("view.btn.minify"))
                     .disabled(!actions.minify)
                     .on_click(send(cx, move || view_msg(id, ViewMsg::MinifyJson))),
             )
             .child(
-                Button::new("string-hex")
+                Button::new(SharedString::from(format!("{prefix}-hex")))
                     .compact()
                     .label(t("view.btn.hex"))
                     .when(hex_on, |b| b.primary())
@@ -324,7 +377,7 @@ impl MainView {
 
         let notice = editor.notice(lang).map(|text| {
             div()
-                .id("string-notice")
+                .id(SharedString::from(format!("{prefix}-notice")))
                 .test_support()
                 .px_2()
                 .py_1()
@@ -334,26 +387,34 @@ impl MainView {
                 .child(text)
         });
 
-        let key_field = inputs
-            .key_name
-            .then(|| field("string-key", t("view.key_name"), &form.key));
+        let key_field = inputs.key_name.then(|| {
+            field(
+                SharedString::from(format!("{prefix}-key")),
+                t("view.key_name"),
+                &form.key,
+            )
+        });
         let member_label = match editor.kind() {
             KeyType::List => t("view.index"),
             _ => t("view.member_name"),
         };
-        let member_field = inputs
-            .member_name
-            .then(|| field("string-member", member_label, &form.member));
+        let member_field = inputs.member_name.then(|| {
+            field(
+                SharedString::from(format!("{prefix}-member")),
+                member_label,
+                &form.member,
+            )
+        });
         let position = inputs.position.then(|| {
             let side = editor.position;
             h_flex()
-                .id("string-position")
+                .id(SharedString::from(format!("{prefix}-position")))
                 .test_support()
                 .gap_2()
                 .items_center()
                 .child(div().text_sm().child(t("view.position")))
                 .child(
-                    Button::new("string-position-head")
+                    Button::new(SharedString::from(format!("{prefix}-position-head")))
                         .compact()
                         .label(t("view.position.head"))
                         .when(side == Side::Head, |b| b.primary())
@@ -362,7 +423,7 @@ impl MainView {
                         })),
                 )
                 .child(
-                    Button::new("string-position-tail")
+                    Button::new(SharedString::from(format!("{prefix}-position-tail")))
                         .compact()
                         .label(t("view.position.tail"))
                         .when(side == Side::Tail, |b| b.primary())
@@ -385,7 +446,7 @@ impl MainView {
                 .child(div().text_sm().child(value_label))
                 .child(
                     div()
-                        .id("string-value")
+                        .id(SharedString::from(format!("{prefix}-value")))
                         .test_support()
                         .flex_1()
                         .min_h_0()
@@ -396,7 +457,7 @@ impl MainView {
                 .when(loading, |d| {
                     d.child(
                         div()
-                            .id("string-loading")
+                            .id(SharedString::from(format!("{prefix}-loading")))
                             .test_support()
                             .text_sm()
                             .text_color(theme.muted_foreground)
@@ -408,18 +469,18 @@ impl MainView {
             .gap_2()
             .justify_end()
             .child(
-                Button::new("string-undo")
+                Button::new(SharedString::from(format!("{prefix}-undo")))
                     .label(t("view.btn.undo"))
                     .disabled(!actions.undo)
                     .on_click(send(cx, move || view_msg(id, ViewMsg::Undo))),
             )
             .child(
-                Button::new("string-cancel")
+                Button::new(SharedString::from(format!("{prefix}-cancel")))
                     .label(t("btn.cancel"))
                     .on_click(send(cx, move || view_msg(id, ViewMsg::CloseEditor))),
             )
             .child(
-                Button::new("string-save")
+                Button::new(SharedString::from(format!("{prefix}-save")))
                     .primary()
                     .label(t("btn.save"))
                     .loading(editor.saving)
@@ -428,12 +489,9 @@ impl MainView {
             );
 
         v_flex()
-            .id("keyview")
-            .test_support()
             .flex_1()
             .min_h_0()
             .gap_2()
-            .child(header)
             .children(key_field)
             .children(member_field)
             .children(position)
@@ -441,43 +499,22 @@ impl MainView {
             .children(notice)
             .child(value)
             .child(footer)
-            .into_any_element()
-    }
-}
-
-impl MainView {
-    /// 成员表页(R-10b 画);这之前先放占位和关闭按钮。
-    fn render_members_page(
-        &self,
-        id: ConnId,
-        _view: &KeyView,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        v_flex()
-            .id("keyview-members")
-            .test_support()
-            .gap_2()
-            .child(
-                div()
-                    .id("keyview-placeholder")
-                    .test_support()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(self.app.t("keys.view_placeholder")),
-            )
-            .child(
-                Button::new("keyview-close")
-                    .label(self.app.t("btn.close"))
-                    .on_click(send(cx, move || view_msg(id, ViewMsg::Close))),
-            )
-            .into_any_element()
     }
 }
 
 #[cfg(test)]
 impl MainView {
     /// 编辑器三个输入控件里现在的文字:(key 名, 成员名, 值)(测试用)。
+    pub(crate) fn member_form_texts(&self, id: ConnId, cx: &App) -> Option<(String, String)> {
+        let f = &self.view_ui.get(&id)?.member.as_ref()?.1;
+        Some((
+            f.member.read(cx).value().to_string(),
+            f.value.read(cx).value().to_string(),
+        ))
+    }
+
     pub(crate) fn form_texts(&self, id: ConnId, cx: &App) -> Option<(String, String, String)> {
-        let f = &self.view_ui.get(&id)?.form;
+        let f = self.view_ui.get(&id)?.page.as_ref()?;
         Some((
             f.key.read(cx).value().to_string(),
             f.member.read(cx).value().to_string(),

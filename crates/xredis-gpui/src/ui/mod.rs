@@ -8,6 +8,7 @@ mod editor_dialog;
 mod key_dialogs;
 mod keys;
 mod keyview;
+mod members;
 mod messagebar;
 mod notice_dialogs;
 mod settings_dialog;

@@ -23,7 +23,7 @@ use crate::messages::Level;
 use crate::msg::{BackendCmd, Cmd};
 use display::show;
 use editor::{Editor, FormError, Target};
-use table::{MemberColumn, MemberTable, ScanRequest, TableMsg};
+use table::{MemberActions, MemberColumn, MemberStatus, MemberTable, ScanRequest, TableMsg};
 
 /// 用户操作和异步结果。
 #[derive(Debug)]
@@ -170,6 +170,8 @@ pub struct KeyView {
     pub rename: Option<InputDialog>,
     pub ttl: Option<InputDialog>,
     generation: u64,
+    /// 每打开一个新编辑器加一(界面靠它判断要不要重建输入控件)。
+    editor_seq: u64,
     token: u64,
     pending: Option<Pending>,
 }
@@ -194,6 +196,7 @@ impl KeyView {
             rename: None,
             ttl: None,
             generation,
+            editor_seq: 0,
             token: 0,
             pending: None,
         }
@@ -216,6 +219,7 @@ impl KeyView {
         v.request_details(ctx, &mut out);
         if kind == KeyType::String {
             v.editor = Some(Editor::string_key(key.clone()));
+            v.editor_seq += 1;
             out.cmds.push(Cmd::Backend(BackendCmd::ViewReadString {
                 id: ctx.id,
                 generation,
@@ -235,6 +239,7 @@ impl KeyView {
         }
         let mut v = Self::blank(generation, Bytes::new(), kind.clone());
         v.editor = Some(Editor::new_key(kind));
+        v.editor_seq += 1;
         Some(v)
     }
 
@@ -330,11 +335,13 @@ impl KeyView {
                     && let Some(row) = t.find(&name)
                 {
                     self.editor = Some(Editor::member(self.key.clone(), self.kind.clone(), row));
+                    self.editor_seq += 1;
                 }
             }
             ViewMsg::NewMember => {
                 if self.table.is_some() && !self.is_writing() {
                     self.editor = Some(Editor::new_member(self.key.clone(), self.kind.clone()));
+                    self.editor_seq += 1;
                 }
             }
             ViewMsg::Table(m) => self.on_table(ctx, m, &mut out),
@@ -800,6 +807,28 @@ impl KeyView {
         }
     }
 
+    pub fn editor_seq(&self) -> u64 {
+        self.editor_seq
+    }
+
+    /// 成员编辑器弹窗的标题;不是成员编辑器是 `None`。
+    pub fn editor_title(&self, lang: &str) -> Option<String> {
+        match &self.editor.as_ref()?.target {
+            Target::Member { .. } => Some(tr(lang, "view.member.edit")),
+            Target::NewMember { .. } => Some(tr(lang, "view.member.new")),
+            _ => None,
+        }
+    }
+
+    /// 成员表的按钮可用状态;String 和新建 key 没有成员表。
+    pub fn member_actions(&self) -> Option<MemberActions> {
+        self.table.as_ref().map(|t| t.actions(self.is_writing()))
+    }
+
+    pub fn member_status(&self, lang: &str) -> Option<MemberStatus> {
+        self.table.as_ref().map(|t| t.status(lang))
+    }
+
     /// 长度的文字:没读到是 `None`(0 是合法值)。
     pub fn length_text(&self) -> Option<String> {
         self.details.as_ref()?.length.map(|n| n.to_string())
@@ -807,11 +836,9 @@ impl KeyView {
 
     /// TTL 的文字(秒,-1 永不过期):没读到是 `None`。
     pub fn ttl_text(&self) -> Option<String> {
-        self.details.as_ref().map(|d| match d.ttl {
-            Ttl::Missing => "-2".to_owned(),
-            Ttl::Persistent => "-1".to_owned(),
-            Ttl::Seconds(n) => n.to_string(),
-        })
+        self.details
+            .as_ref()
+            .map(|d| crate::keylist::ttl_text(d.ttl))
     }
 
     /// 成员表的列标题(翻译 key,GUI 用 `keyview::label` 取文字)。

@@ -279,7 +279,9 @@ impl Render for NoticeBody {
                     )
                     .into_any_element()
             }
-            DialogKind::Settings | DialogKind::Editor => div().into_any_element(),
+            DialogKind::Settings | DialogKind::Editor | DialogKind::Rename | DialogKind::Ttl => {
+                div().into_any_element()
+            }
         }
     }
 }

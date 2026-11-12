@@ -45,6 +45,8 @@ pub enum ViewMsg {
     SetValue(String),
     SetPosition(Side),
     SetHex(bool),
+    /// 语言下拉(只影响 Format、Minify 能不能用)。
+    SetFormat(display::Format),
     Undo,
     FormatJson,
     MinifyJson,
@@ -147,6 +149,13 @@ struct Pending {
     token: u64,
     purpose: Purpose,
     ops: Vec<WriteOp>,
+}
+
+/// 视图工具栏上的按钮哪些可用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ViewActions {
+    pub rename: bool,
+    pub ttl: bool,
 }
 
 #[derive(Debug)]
@@ -300,15 +309,14 @@ impl KeyView {
             ViewMsg::SetMemberName(t) => self.with_editor(|e| e.set_member_name(t)),
             ViewMsg::SetValue(t) => self.with_editor(|e| e.set_value(t)),
             ViewMsg::SetPosition(side) => self.with_editor(|e| e.position = side),
-            ViewMsg::SetHex(on) => self.with_editor(|e| e.hex = on),
+            ViewMsg::SetHex(on) => self.with_editor(|e| e.hex = on && !e.is_new()),
+            ViewMsg::SetFormat(f) => self.with_editor(|e| e.set_format(f)),
             ViewMsg::Undo => self.with_editor(Editor::undo),
             ViewMsg::FormatJson => self.reformat(ctx, true, &mut out),
             ViewMsg::MinifyJson => self.reformat(ctx, false, &mut out),
             ViewMsg::Save => self.save(ctx, &mut out),
             ViewMsg::CloseEditor => match &self.editor {
-                Some(e) if matches!(e.target, Target::StringKey { .. } | Target::NewKey { .. }) => {
-                    out.close = true
-                }
+                Some(e) if e.is_key_level() => out.close = true,
                 _ => {
                     // 保存在途时不关:结果回来还要用
                     if !self.is_writing() {
@@ -668,9 +676,7 @@ impl KeyView {
                     out.note(Level::Success, tr(ctx.lang, "view.saved"), true);
                 }
                 let editor = self.editor.take();
-                let key_level = editor.as_ref().is_some_and(|e| {
-                    matches!(e.target, Target::StringKey { .. } | Target::NewKey { .. })
-                });
+                let key_level = editor.as_ref().is_some_and(Editor::is_key_level);
                 if key_level {
                     // String 编辑和新建 key:整个视图就是这个编辑器,关掉回列表
                     out.list
@@ -770,6 +776,42 @@ impl KeyView {
 
     pub fn title_key(&self) -> String {
         show(&self.key).text
+    }
+
+    /// 标题:已有 key 是 key 名,新建是“New 类型”。
+    pub fn title(&self, lang: &str) -> String {
+        if self.is_creating() {
+            tr_with(
+                lang,
+                "view.title.new",
+                &[("type", crate::keylist::type_label(Some(&self.kind)))],
+            )
+        } else {
+            self.title_key()
+        }
+    }
+
+    /// 工具栏的 Rename 和 TTL 按钮能不能点:新建 key 还没有 key,有写操作在途时不接受别的写。
+    pub fn actions(&self) -> ViewActions {
+        let on = !self.is_creating() && !self.is_writing();
+        ViewActions {
+            rename: on,
+            ttl: on,
+        }
+    }
+
+    /// 长度的文字:没读到是 `None`(0 是合法值)。
+    pub fn length_text(&self) -> Option<String> {
+        self.details.as_ref()?.length.map(|n| n.to_string())
+    }
+
+    /// TTL 的文字(秒,-1 永不过期):没读到是 `None`。
+    pub fn ttl_text(&self) -> Option<String> {
+        self.details.as_ref().map(|d| match d.ttl {
+            Ttl::Missing => "-2".to_owned(),
+            Ttl::Persistent => "-1".to_owned(),
+            Ttl::Seconds(n) => n.to_string(),
+        })
     }
 
     /// 成员表的列标题(翻译 key,GUI 用 `keyview::label` 取文字)。

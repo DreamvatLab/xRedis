@@ -9,7 +9,11 @@ use xredis_core::members::{Member, MemberOp, NewContent, WriteOp};
 use xredis_core::types::list::Side;
 use xredis_core::types::string::SetMode;
 
+use std::borrow::Cow;
+
 use super::display::{Format, Shown, detect_format, format_json, hex_dump, minify_json, show};
+use crate::errors::human_bytes;
+use crate::i18n::{tr, tr_with};
 
 /// 一个输入框:原值(字节)和当前文本。
 #[derive(Debug, Clone)]
@@ -87,6 +91,18 @@ pub enum FormError {
     MemberNameEmpty,
     /// 分数不是数字(含 NaN)。
     ScoreInvalid,
+}
+
+/// 编辑器的按钮哪些可用(GUI 照着画,不自己判断)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EditorActions {
+    pub save: bool,
+    pub undo: bool,
+    /// Format 和 Minify:语言是 JSON、值可编辑、不在十六进制视图里。
+    pub format: bool,
+    pub minify: bool,
+    /// 切十六进制视图:已有的值读完之后都可以看,新建的没有原值。
+    pub hex: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -170,6 +186,14 @@ impl Editor {
         self.loading = false;
     }
 
+    /// 这个编辑器就是整个视图(String 和新建 key),不是成员表上的弹窗。
+    pub fn is_key_level(&self) -> bool {
+        matches!(
+            self.target,
+            Target::StringKey { .. } | Target::NewKey { .. }
+        )
+    }
+
     pub fn is_new(&self) -> bool {
         matches!(
             self.target,
@@ -245,6 +269,53 @@ impl Editor {
         hex_dump(self.value.orig())
     }
 
+    pub fn actions(&self) -> EditorActions {
+        let formattable = self.format == Format::Json
+            && !self.read_only()
+            && !self.loading
+            && !self.hex
+            && !self.saving;
+        EditorActions {
+            save: self.can_save(),
+            undo: !self.saving && self.has_changes(),
+            format: formattable,
+            minify: formattable,
+            hex: !self.is_new() && !self.loading,
+        }
+    }
+
+    /// 值输入框里该显示的文字:十六进制视图是原值的转储,否则是草稿。
+    pub fn value_text(&self) -> Cow<'_, str> {
+        if self.hex {
+            Cow::Owned(self.hex_text())
+        } else {
+            Cow::Borrowed(&self.value.text)
+        }
+    }
+
+    /// 只读的原因(已翻译):二进制,或大 String 只读了一部分。可编辑时是 `None`。
+    pub fn notice(&self, lang: &str) -> Option<String> {
+        if self.is_new() {
+            return None;
+        }
+        if let Some(total) = self.truncated {
+            return Some(tr_with(
+                lang,
+                "view.truncated_readonly",
+                &[
+                    ("size", &human_bytes(total)),
+                    ("shown", &human_bytes(self.value.orig().len() as u64)),
+                ],
+            ));
+        }
+        (self.value.lossy() || self.member.lossy()).then(|| tr(lang, "view.binary_readonly"))
+    }
+
+    /// 选语言:只影响 Format、Minify 能不能用(v2.0 没有语法高亮),不算改动。
+    pub fn set_format(&mut self, format: Format) {
+        self.format = format;
+    }
+
     pub fn set_key_name(&mut self, text: String) {
         if self.key_name_editable() {
             self.key.text = text;
@@ -258,7 +329,8 @@ impl Editor {
     }
 
     pub fn set_value(&mut self, text: String) {
-        if !self.read_only() {
+        // 十六进制视图是只读的转储,输入不能落到草稿里
+        if !self.read_only() && !self.hex {
             self.value.text = text;
         }
     }

@@ -63,6 +63,19 @@ pub enum Format {
     Json,
 }
 
+impl Format {
+    /// 语言下拉的选项(v2.0 只有这两种,设计文档「有意差别」)。
+    pub const ALL: [Format; 2] = [Format::Plain, Format::Json];
+
+    /// 下拉里显示的名字(专有名词,不翻译)。
+    pub fn label(self) -> &'static str {
+        match self {
+            Format::Plain => "Plain text",
+            Format::Json => "JSON",
+        }
+    }
+}
+
 /// 自动检测(P-21):能解析成 JSON 对象或数组才算 JSON;`123`、`"x"`、`true` 这类当纯文本。
 pub fn detect_format(text: &str) -> Format {
     let t = text.trim_start();

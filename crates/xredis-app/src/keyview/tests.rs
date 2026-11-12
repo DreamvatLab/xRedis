@@ -1512,3 +1512,180 @@ fn column_titles_follow_the_key_type() {
     );
     assert_eq!(titles(KeyType::String), None);
 }
+
+// ---- R-10a:给界面的查询(哪些按钮可用、提示文字、语言) ----
+
+#[test]
+fn the_editor_says_which_buttons_are_usable() {
+    // 值还在读:什么都不能用
+    let mut e = Editor::string_key(b("k"));
+    assert!(e.is_key_level());
+    assert!(!member_editor(KeyType::Hash, &hash_row("f", "v")).is_key_level());
+    assert!(!Editor::new_member(b("k"), KeyType::Hash).is_key_level());
+    assert!(Editor::new_key(KeyType::Hash).is_key_level());
+    let a = e.actions();
+    assert!(
+        !a.save && !a.undo && !a.format && !a.minify && !a.hex,
+        "{a:?}"
+    );
+
+    // 读完、没改、纯文本:只能切十六进制
+    e.loaded_string(Bytes::from_static(b"plain"), 5, false);
+    let a = e.actions();
+    assert!(
+        !a.save && !a.undo && !a.format && !a.minify && a.hex,
+        "{a:?}"
+    );
+
+    // 改了:Save 和 Undo 可用;语言是纯文本时 Format、Minify 不可用
+    e.set_value("plain 2".into());
+    let a = e.actions();
+    assert!(a.save && a.undo && !a.format && !a.minify, "{a:?}");
+    e.undo();
+    assert!(!e.actions().save);
+
+    // 自动检测出 JSON:Format、Minify 可用;十六进制视图里不可用
+    let mut j = string_editor("k", br#"{"a":1}"#);
+    assert_eq!(j.format, Format::Json);
+    assert!(j.actions().format && j.actions().minify);
+    j.hex = true;
+    assert!(!j.actions().format && !j.actions().minify);
+    j.hex = false;
+    j.set_format(Format::Plain);
+    assert!(!j.actions().format, "the language decides");
+    j.set_format(Format::Json);
+    assert!(j.actions().format);
+
+    // 二进制:只读,只能切十六进制
+    let bin = string_editor("k", &binary());
+    let a = bin.actions();
+    assert!(
+        !a.save && !a.undo && !a.format && !a.minify && a.hex,
+        "{a:?}"
+    );
+
+    // 新建:没有十六进制;输入了东西才能保存和撤销
+    let mut n = Editor::new_key(KeyType::String);
+    let a = n.actions();
+    assert!(!a.save && !a.undo && !a.hex && !a.format, "{a:?}");
+    n.set_key_name("x".into());
+    assert!(n.actions().save && n.actions().undo);
+    // 保存在途时不能再保存
+    n.saving = true;
+    assert!(!n.actions().save);
+}
+
+#[test]
+fn the_hex_view_is_read_only_and_leaves_the_draft_alone() {
+    let mut e = string_editor("k", b"abc");
+    e.set_value("abcd".into());
+    e.hex = true;
+    assert!(
+        e.value_text().starts_with("00000000  61 62 63"),
+        "{}",
+        e.value_text()
+    );
+    e.set_value("zzz".into());
+    assert_eq!(e.value.text, "abcd", "typing is ignored in the hex view");
+    e.hex = false;
+    assert_eq!(e.value_text(), "abcd", "the draft is still there");
+}
+
+#[test]
+fn set_format_changes_only_the_language() {
+    let (mut h, _) = H::open("文章", KeyType::String);
+    h.string_read(b"text");
+    assert_eq!(h.view.editor.as_ref().unwrap().format, Format::Plain);
+    h.send(ViewMsg::SetFormat(Format::Json));
+    let e = h.view.editor.as_ref().unwrap();
+    assert_eq!(e.format, Format::Json);
+    assert!(
+        !e.has_changes(),
+        "the language is not a change of the value"
+    );
+    // 纯文本值切成 JSON 后点 Format:不是合法 JSON,提示并保持原文
+    let out = h.send(ViewMsg::FormatJson);
+    assert!(last_note(&out).text.contains("not valid JSON"), "{out:?}");
+    assert_eq!(h.view.editor.as_ref().unwrap().value.text, "text");
+}
+
+#[test]
+fn the_editor_explains_why_it_is_read_only() {
+    let plain = string_editor("k", b"plain");
+    assert_eq!(plain.notice("en"), None);
+
+    let bin = string_editor("k", &binary());
+    let text = bin.notice("en").expect("a notice");
+    assert!(
+        text.contains("binary") && text.contains("hex view"),
+        "{text}"
+    );
+
+    let mut big = Editor::string_key(b("k"));
+    big.loaded_string(Bytes::from(vec![b'a'; 1024 * 1024]), 70 * 1024 * 1024, true);
+    let text = big.notice("en").expect("a notice");
+    assert!(
+        text.contains("70.0 MiB") && text.contains("1.0 MiB") && text.contains("read-only"),
+        "{text}"
+    );
+
+    // 新建的永远可编辑,没有提示
+    assert_eq!(Editor::new_key(KeyType::String).notice("en"), None);
+}
+
+#[test]
+fn the_view_gives_its_title_and_the_header_texts() {
+    let (mut h, _) = H::open("文章", KeyType::String);
+    assert_eq!(h.view.title("en"), "文章");
+    assert_eq!(h.view.length_text(), None, "not loaded is not zero");
+    assert_eq!(h.view.ttl_text(), None);
+    h.details(KeyType::String, 0, Ttl::Persistent);
+    assert_eq!(h.view.length_text().as_deref(), Some("0"));
+    assert_eq!(h.view.ttl_text().as_deref(), Some("-1"));
+    h.details(KeyType::String, 12, Ttl::Seconds(90));
+    assert_eq!(h.view.length_text().as_deref(), Some("12"));
+    assert_eq!(h.view.ttl_text().as_deref(), Some("90"));
+
+    let new = KeyView::new_key(3, KeyType::ZSet).unwrap();
+    assert_eq!(new.title("en"), "New ZSet");
+    assert_eq!(new.ttl_text(), None);
+}
+
+#[test]
+fn the_languages_to_choose_from() {
+    assert_eq!(Format::ALL, [Format::Plain, Format::Json]);
+    assert_eq!(Format::Plain.label(), "Plain text");
+    assert_eq!(Format::Json.label(), "JSON");
+}
+
+#[test]
+fn rename_and_ttl_are_not_offered_while_creating_or_writing() {
+    let (mut h, _) = H::open("文章", KeyType::String);
+    h.string_read(b"x");
+    assert_eq!(
+        h.view.actions(),
+        ViewActions {
+            rename: true,
+            ttl: true
+        }
+    );
+    // 保存在途:不能同时改名和改 TTL
+    h.send(ViewMsg::SetValue("y".into()));
+    h.send(ViewMsg::Save);
+    assert_eq!(
+        h.view.actions(),
+        ViewActions {
+            rename: false,
+            ttl: false
+        }
+    );
+    // 新建 key 还没有 key,没有可改名和改 TTL 的
+    let new = KeyView::new_key(1, KeyType::String).unwrap();
+    assert_eq!(
+        new.actions(),
+        ViewActions {
+            rename: false,
+            ttl: false
+        }
+    );
+}

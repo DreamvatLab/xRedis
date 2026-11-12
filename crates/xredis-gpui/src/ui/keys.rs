@@ -150,24 +150,10 @@ impl MainView {
             .flex_1()
             .min_h_0()
             .gap_2();
-        // 打开了 key:值编辑器是 R-10 的内容,这里先放占位和关闭按钮
-        if tab.view.is_some() {
+        // 打开了 key(或新建):画值编辑器或成员表,见 `ui/keyview.rs`
+        if let Some(view) = &tab.view {
             return page
-                .child(
-                    div()
-                        .id("keyview-placeholder")
-                        .test_support()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(self.app.t("keys.view_placeholder")),
-                )
-                .child(
-                    Button::new("keyview-close")
-                        .label(self.app.t("btn.close"))
-                        .on_click(send(cx, move || Msg::View {
-                            id,
-                            msg: ViewMsg::Close,
-                        })),
-                )
+                .child(self.render_keyview(id, view, cx))
                 .into_any_element();
         }
         let Some(ui) = self.keys_ui.get(&id) else {

@@ -5,7 +5,9 @@
 
 mod dialogs;
 mod editor_dialog;
+mod key_dialogs;
 mod keys;
+mod keyview;
 mod messagebar;
 mod notice_dialogs;
 mod settings_dialog;
@@ -21,6 +23,7 @@ use crate::model::MainView;
 
 pub use dialogs::DialogKind;
 pub(crate) use keys::KeysUiMap;
+pub(crate) use keyview::ViewUiMap;
 
 impl Render for MainView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

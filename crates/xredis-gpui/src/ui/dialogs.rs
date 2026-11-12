@@ -17,8 +17,10 @@ use gpui_kit::component::{ActiveTheme as _, WindowExt as _, dialog::Dialog, v_fl
 use gpui_kit::*;
 use xredis_app::Msg;
 use xredis_app::keylist::KeysMsg;
+use xredis_app::keyview::ViewMsg;
 
 use super::editor_dialog::EditorBody;
+use super::key_dialogs::{KeyInputBody, dialog_of};
 use super::notice_dialogs::NoticeBody;
 use super::settings_dialog::SettingsBody;
 use crate::model::MainView;
@@ -31,19 +33,23 @@ pub enum DialogKind {
     Editor,
     DeleteKeys,
     PasteKeys,
+    Rename,
+    Ttl,
     Confirm,
     Error,
 }
 
 impl DialogKind {
     /// 同时开着时从下到上的顺序。
-    pub const ALL: [DialogKind; 8] = [
+    pub const ALL: [DialogKind; 10] = [
         DialogKind::Agreement,
         DialogKind::Privacy,
         DialogKind::Settings,
         DialogKind::Editor,
         DialogKind::DeleteKeys,
         DialogKind::PasteKeys,
+        DialogKind::Rename,
+        DialogKind::Ttl,
         DialogKind::Confirm,
         DialogKind::Error,
     ];
@@ -69,6 +75,9 @@ impl MainView {
                 .active_tab()
                 .is_some_and(|t| t.keys.confirm_delete.is_some()),
             DialogKind::PasteKeys => app.active_tab().is_some_and(|t| t.keys.paste.is_some()),
+            DialogKind::Rename | DialogKind::Ttl => app
+                .active
+                .is_some_and(|id| dialog_of(app, id, kind).is_some()),
             DialogKind::Confirm => app.confirm.is_some(),
             DialogKind::Error => app.error_dialog.is_some(),
         }
@@ -179,6 +188,35 @@ impl MainView {
                 notice(cx),
                 None,
             ),
+            // 改 key 名、改 TTL:回车确认,Esc 取消
+            DialogKind::Rename | DialogKind::Ttl => {
+                let Some(id) = self.app.active else { return };
+                let body =
+                    cx.new(|cx| KeyInputBody::new(main.clone(), id, kind, &self.app, window, cx));
+                let first = body.read(cx).first_input();
+                let ttl = kind == DialogKind::Ttl;
+                (
+                    420.,
+                    key(move || Msg::View {
+                        id,
+                        msg: if ttl {
+                            ViewMsg::ConfirmTtl
+                        } else {
+                            ViewMsg::ConfirmRename
+                        },
+                    }),
+                    key(move || Msg::View {
+                        id,
+                        msg: if ttl {
+                            ViewMsg::CancelTtl
+                        } else {
+                            ViewMsg::CancelRename
+                        },
+                    }),
+                    body.into(),
+                    Some(first),
+                )
+            }
             DialogKind::Confirm => (
                 420.,
                 // 回车不确认删除(v1 的确认框回车不起作用):只有点按钮才删,Esc 取消

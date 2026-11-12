@@ -493,6 +493,54 @@ view.binary_readonly:
   en: "This value contains binary data and is shown read-only. Use the hex view to inspect it."
 view.truncated_readonly:
   en: "This value is %{size}. Only the first %{shown} are shown, read-only."
+view.title.new:
+  en: "New %{type}"
+view.key_name:
+  en: "Key"
+view.member_name:
+  en: "Field / member"
+view.index:
+  en: "Index"
+view.value:
+  en: "Value"
+view.score:
+  en: "Score"
+view.language:
+  en: "Language"
+view.loading:
+  en: "Loading..."
+view.btn.undo:
+  en: "Undo"
+view.btn.format:
+  en: "Format"
+view.btn.minify:
+  en: "Minify"
+view.btn.hex:
+  en: "Hex"
+view.btn.rename:
+  en: "Rename"
+view.btn.ttl:
+  en: "TTL"
+view.info.length:
+  en: "Length"
+view.info.ttl:
+  en: "TTL"
+view.rename.title:
+  en: "Rename key"
+view.rename.label:
+  en: "New key name"
+view.ttl.title:
+  en: "Set TTL"
+view.ttl.label:
+  en: "TTL in seconds"
+view.ttl.hint:
+  en: "-1 removes the expiry. 0 is not allowed. The maximum is 2147483647."
+view.position:
+  en: "Insert at"
+view.position.head:
+  en: "Head"
+view.position.tail:
+  en: "Tail"
 view.col.field:
   en: "Field"
 view.col.index:

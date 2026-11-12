@@ -26,6 +26,8 @@ pub struct MainView {
     pub(crate) dialogs: Vec<crate::ui::DialogKind>,
     /// 每个 Tab 的 Keys 页的输入框和滚动位置(`ui/keys.rs`)。
     pub(crate) keys_ui: crate::ui::KeysUiMap,
+    /// 每个 Tab 的值编辑器的输入控件(`ui/keyview.rs`)。
+    pub(crate) view_ui: crate::ui::ViewUiMap,
     _subs: Vec<Subscription>,
 }
 
@@ -66,6 +68,7 @@ impl MainView {
             shown_toasts: HashSet::new(),
             dialogs: Vec::new(),
             keys_ui: Default::default(),
+            view_ui: Default::default(),
             _subs: vec![bounds_sub],
         };
         view.run(start, window, cx);
@@ -112,6 +115,7 @@ impl MainView {
     fn after_batch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sync_toasts(window, cx);
         self.sync_keys_ui(window, cx);
+        self.sync_view_ui(window, cx);
         self.sync_dialogs(window, cx);
         cx.notify();
     }

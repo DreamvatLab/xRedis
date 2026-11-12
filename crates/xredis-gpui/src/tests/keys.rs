@@ -331,13 +331,10 @@ fn clicking_an_openable_key_opens_it_and_a_stream_does_not(cx: &mut TestAppConte
     click(cx, &env, "key-open-0");
     cx.run_until_parked();
     assert!(read(cx, &env, |a| a.tab(id).unwrap().view.is_some()));
-    assert!(
-        exists(cx, &env, "keyview-placeholder"),
-        "R-10 draws the editor"
-    );
+    assert!(exists(cx, &env, "keyview"), "the string editor is drawn");
     assert!(!exists(cx, &env, "keys-table"));
-    // 关掉回到列表
-    click(cx, &env, "keyview-close");
+    // 取消回到列表
+    click(cx, &env, "string-cancel");
     assert!(read(cx, &env, |a| a.tab(id).unwrap().view.is_none()));
     assert!(exists(cx, &env, "keys-table"));
 }
@@ -664,10 +661,11 @@ fn new_key_opens_the_editor_view_for_the_chosen_type(cx: &mut TestAppContext) {
     );
     cx.run_until_parked();
     assert!(read(cx, &env, |a| a.tab(id).unwrap().view.is_some()));
+    assert!(exists(cx, &env, "keyview"));
     assert!(
-        exists(cx, &env, "keyview-placeholder"),
-        "R-10 draws the editor"
+        exists(cx, &env, "string-member"),
+        "a Hash needs a field name"
     );
-    click(cx, &env, "keyview-close");
+    click(cx, &env, "string-cancel");
     assert!(exists(cx, &env, "keys-new"));
 }

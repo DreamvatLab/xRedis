@@ -16,7 +16,8 @@ path = "src/main.rs"
 [dependencies]
 xredis-core.workspace = true
 xredis-app.workspace = true
-gpui-kit.workspace = true
+# 只开 tree-sitter(只带 tree-sitter 运行时和 tree-sitter-json),给 JSON 语法高亮
+gpui-kit = { workspace = true, features = ["tree-sitter"] }
 async-channel.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

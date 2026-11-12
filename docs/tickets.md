@@ -34,7 +34,7 @@
 | R-10 | gpui:String 编辑器、成员表和成员编辑器、十六进制视图、改名和 TTL(50 从 R-09 转来) | 拆成 R-10a、R-10b | 1 开,51 拆 |
 | R-10a | gpui:String 编辑器、新建 key 的编辑器、十六进制视图、改名和 TTL(语法高亮不做) | 做完,审核通过 | 51 完,52 审 |
 | R-10b | gpui:成员表(Hash、List、Set、ZSet)和成员编辑器;另加十六进制上限 64 KiB、"Plain text" 翻译、`ttl_text` 去重 | 做完,审核通过 | 51 拆,52 加,53 完,54 审 |
-| R-10c | 语法高亮:gpui-kit 的 `tree-sitter` 特性,只带 JSON;量发布版体积的增量 | 开着 | 52 开 |
+| R-10c | 语法高亮:gpui-kit 的 `tree-sitter` 特性,只带 JSON;量发布版体积的增量 | 待审 | 52 开,57 完 |
 | R-11 | gpui:Console 和 Pub/Sub 子页 | 做完(拆成 R-11a、R-11b,都已审核通过) | 1 开,55 拆,56 结单 |
 | R-11a | gpui:Console 子页(输入行、历史、按词移动和删除、Ctrl+C、等待动画、可选中复制的输出) | 做完,审核通过 | 55 完,56 审 |
 | R-11b | gpui:Pub/Sub 子页(订阅、退订、发布、Channels、Clear、虚拟滚动的消息列表) | 做完,审核通过 | 55 完,56 审 |

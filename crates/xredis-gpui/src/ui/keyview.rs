@@ -56,7 +56,12 @@ impl EditorForm {
         let key = new_input(window, cx, &editor.key.text, "", false);
         let member = new_input(window, cx, &editor.member.text, "", false);
         let text = editor.value_text().into_owned();
-        let value = cx.new(|cx| EditorState::new(window, cx).default_value(text));
+        let language = language_name(editor);
+        let value = cx.new(|cx| {
+            EditorState::new(window, cx)
+                .language(language)
+                .default_value(text)
+        });
         let mut subs = Vec::new();
         for (input, make) in [
             (&key, ViewMsg::SetKeyName as fn(String) -> ViewMsg),
@@ -121,6 +126,7 @@ impl EditorForm {
             });
         }
         let ro = editor.read_only() || editor.hex || editor.loading || editor.saving;
+        let language = language_name(editor);
         let hex_changed = self.hex_shown != editor.hex;
         self.hex_shown = editor.hex;
         self.value.update(cx, |s, cx| {
@@ -132,7 +138,22 @@ impl EditorForm {
                 s.set_value(editor.value.text.clone(), window, cx);
             }
             s.set_readonly(ro, cx);
+            if s.language_name().as_ref() != language {
+                s.set_highlighter(language, cx);
+            }
         });
+    }
+}
+
+/// 值输入框现在该用的组件库语言名,"" 是不高亮。选哪种语言由 `App` 的 `Editor::format` 给,
+/// 十六进制视图是转储,一律不高亮;这里只把 `Format` 翻成组件库的名字(画法)。
+fn language_name(editor: &Editor) -> &'static str {
+    if editor.hex {
+        return "";
+    }
+    match editor.format {
+        Format::Plain => "",
+        Format::Json => "json",
     }
 }
 
@@ -511,6 +532,12 @@ impl MainView {
             f.member.read(cx).value().to_string(),
             f.value.read(cx).value().to_string(),
         ))
+    }
+
+    /// 页面编辑器值输入框的语言名(测试用;`language_name()` 是组件库公开的读取接口)。
+    pub(crate) fn form_language(&self, id: ConnId, cx: &App) -> Option<String> {
+        let f = self.view_ui.get(&id)?.page.as_ref()?;
+        Some(f.value.read(cx).language_name().to_string())
     }
 
     pub(crate) fn form_texts(&self, id: ConnId, cx: &App) -> Option<(String, String, String)> {

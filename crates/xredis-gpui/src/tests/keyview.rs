@@ -237,6 +237,32 @@ fn json_is_detected_and_format_and_minify_rewrite_the_control(cx: &mut TestAppCo
     assert!(!editor(cx, &env, id, |e| e.actions().minify));
 }
 
+fn language(cx: &mut TestAppContext, env: &Env, id: ConnId) -> String {
+    cx.read(|cx| env.view.read(cx).form_language(id, cx).expect("a form"))
+}
+
+#[gpui_kit::test]
+fn the_value_control_highlights_json_only_when_the_language_is_json(cx: &mut TestAppContext) {
+    let (env, ids) = setup(cx, &["a"]);
+    let id = ids[0];
+    env.fake.put_string(b"j", br#"{"a":[1,2]}"#);
+    open_tab(cx, &env, id);
+    open_key(cx, &env, id, 0);
+    // 打开时自动检测出 JSON
+    assert_eq!(language(cx, &env, id), "json");
+    send(cx, &env, id, ViewMsg::SetFormat(Format::Plain));
+    assert_eq!(language(cx, &env, id), "");
+    send(cx, &env, id, ViewMsg::SetFormat(Format::Json));
+    assert_eq!(language(cx, &env, id), "json");
+    // 十六进制视图是转储,不高亮;回来后恢复
+    click(cx, &env, "string-hex");
+    cx.run_until_parked();
+    assert_eq!(language(cx, &env, id), "");
+    click(cx, &env, "string-hex");
+    cx.run_until_parked();
+    assert_eq!(language(cx, &env, id), "json");
+}
+
 #[gpui_kit::test]
 fn formatting_text_that_is_not_json_warns_and_keeps_the_text(cx: &mut TestAppContext) {
     let (env, ids) = setup(cx, &["a"]);

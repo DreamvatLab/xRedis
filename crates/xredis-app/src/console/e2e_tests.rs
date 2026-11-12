@@ -88,9 +88,14 @@ async fn the_waiting_animation_shows_for_slow_commands() {
         console(&h, id).waiting_frame(now()).is_some(),
         "after 500 ms"
     );
+    assert!(
+        h.app.console_waiting_frame(id).is_some(),
+        "the App answers for the GUI, with its own clock"
+    );
     h.settle(600).await;
     assert!(!console(&h, id).is_running());
     assert!(console(&h, id).waiting_frame(now()).is_none());
+    assert!(h.app.console_waiting_frame(id).is_none());
     assert_eq!(lines(&h, id).last().unwrap(), "PONG");
 }
 

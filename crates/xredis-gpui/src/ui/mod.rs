@@ -3,6 +3,7 @@
 //! 每个可点的控件都有稳定的 id(`menu-file`、`conn-<连接 id>`、`tab-<连接 id>`、`add-connection`……),
 //! 无头测试靠它们找元素。
 
+mod console;
 mod dialogs;
 mod editor_dialog;
 mod key_dialogs;
@@ -11,6 +12,7 @@ mod keyview;
 mod members;
 mod messagebar;
 mod notice_dialogs;
+mod pubsub;
 mod settings_dialog;
 mod sidebar;
 mod tabs;
@@ -22,9 +24,11 @@ use xredis_app::Msg;
 
 use crate::model::MainView;
 
+pub(crate) use console::ConsoleUiMap;
 pub use dialogs::DialogKind;
 pub(crate) use keys::KeysUiMap;
 pub(crate) use keyview::ViewUiMap;
+pub(crate) use pubsub::PubSubUiMap;
 
 impl Render for MainView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

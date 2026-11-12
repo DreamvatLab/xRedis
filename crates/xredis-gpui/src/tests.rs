@@ -21,10 +21,12 @@ struct Env {
     fake: Arc<FakeBackend>,
 }
 
+mod console;
 mod dialogs;
 mod keys;
 mod keyview;
 mod members;
+mod pubsub;
 
 /// 开一个窗口,启动并同意协议,等到启动完成。
 fn setup(cx: &mut TestAppContext, names: &[&str]) -> (Env, Vec<ConnId>) {

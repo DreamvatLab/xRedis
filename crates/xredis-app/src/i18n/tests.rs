@@ -193,6 +193,8 @@ fn every_key_used_in_code_exists_in_english() {
         "btn",
         "conn",
         "tab",
+        "pubsub",
+        "console",
         "db",
         "keys",
         "view",

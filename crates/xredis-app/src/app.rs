@@ -288,6 +288,12 @@ impl App {
         Some(tab.keys.status(&self.lang, info_total))
     }
 
+    /// 控制台等待动画的当前一帧(P-50):命令执行超过 500 ms 才有。时钟在 `App` 里,GUI 只管画;
+    /// 重画的时机是 `App` 排的 `ConsoleMsg::Tick`。
+    pub fn console_waiting_frame(&self, id: ConnId) -> Option<char> {
+        self.tab(id)?.console.waiting_frame(self.now())
+    }
+
     // ---- 内部工具 ----
 
     fn now(&self) -> i64 {

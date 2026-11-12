@@ -538,3 +538,126 @@ fn browsing_an_empty_history_does_nothing() {
     h.send(ConsoleMsg::HistoryNext);
     assert_eq!(h.c.input(), "draft");
 }
+
+// ---------------------------------------------------------------------------
+// R-11a:GUI 用组件库的输入框编辑,整行同步进来;动画定时器由 App 排;输出的版本号
+// ---------------------------------------------------------------------------
+
+fn after_ticks(out: &ConsoleOut) -> Vec<(u64, u64)> {
+    use crate::msg::{Msg, PlatformCmd};
+    out.cmds
+        .iter()
+        .filter_map(|c| match c {
+            Cmd::Platform(PlatformCmd::After { ms, msg }) => match msg.as_ref() {
+                Msg::Console {
+                    msg: ConsoleMsg::Tick { generation },
+                    ..
+                } => Some((*ms, *generation)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn set_input_replaces_the_line_and_ignores_the_same_text() {
+    let mut h = H::new();
+    h.send(ConsoleMsg::SetInput("GET a".into()));
+    assert_eq!(h.c.input(), "GET a");
+    assert_eq!(h.c.cursor(), 5);
+    h.send(ConsoleMsg::Left);
+    h.send(ConsoleMsg::SetInput("GET a".into()));
+    assert_eq!(h.c.cursor(), 4, "same text: nothing moves");
+    h.send(ConsoleMsg::SetInput("SET 中\n文".into()));
+    assert_eq!(h.c.input(), "SET 中 文", "one line only");
+    assert_eq!(h.c.cursor(), 7, "the cursor counts characters");
+}
+
+#[test]
+fn a_line_typed_through_set_input_comes_back_after_browsing_history() {
+    let mut h = H::new();
+    let (g, _) = h.run("PING").unwrap();
+    h.finish(g, "PONG");
+    h.send(ConsoleMsg::SetInput("half a comm".into()));
+    h.send(ConsoleMsg::HistoryPrev);
+    assert_eq!(h.c.input(), "PING");
+    h.send(ConsoleMsg::HistoryNext);
+    assert_eq!(h.c.input(), "half a comm");
+}
+
+#[test]
+fn a_sent_command_arms_the_wait_ticker_and_it_stops_with_the_result() {
+    let mut h = H::new();
+    h.type_text("BLPOP q 0");
+    let out = h.send(ConsoleMsg::Submit);
+    let ticks = after_ticks(&out);
+    assert_eq!(ticks.len(), 1);
+    let (ms, g) = ticks[0];
+    assert_eq!(
+        ms,
+        WAIT_ANIMATION_AFTER_MS.unsigned_abs(),
+        "the first tick is when the animation starts"
+    );
+    // 还在等:再排一次,间隔是一帧
+    let out = h.send(ConsoleMsg::Tick { generation: g });
+    assert_eq!(after_ticks(&out), vec![(WAIT_FRAME_MS.unsigned_abs(), g)]);
+    // 别的命令的旧 tick 不续
+    let out = h.send(ConsoleMsg::Tick { generation: g + 7 });
+    assert!(after_ticks(&out).is_empty());
+    // 结果回来后 tick 到了也不再续
+    h.finish(g, "(nil)");
+    let out = h.send(ConsoleMsg::Tick { generation: g });
+    assert!(after_ticks(&out).is_empty());
+    assert!(
+        ConsoleMsg::Tick { generation: g }.is_result(),
+        "a tick is not a user action"
+    );
+}
+
+#[test]
+fn local_commands_and_syntax_errors_arm_no_ticker() {
+    let mut h = H::new();
+    h.type_text("clear");
+    assert!(after_ticks(&h.send(ConsoleMsg::Submit)).is_empty());
+    h.type_text("GET \"oops");
+    assert!(after_ticks(&h.send(ConsoleMsg::Submit)).is_empty());
+}
+
+#[test]
+fn the_output_revision_changes_with_every_change_and_the_text_joins_the_lines() {
+    let mut h = H::new();
+    let r0 = h.c.output_revision();
+    let (g, _) = h.run("PING").unwrap();
+    let r1 = h.c.output_revision();
+    assert_ne!(r0, r1, "the echo line");
+    h.finish(g, "PONG");
+    assert_ne!(r1, h.c.output_revision());
+    assert_eq!(h.c.output_text(), "> PING\nPONG");
+    let r2 = h.c.output_revision();
+    h.send(ConsoleMsg::Left); // 不动输出
+    assert_eq!(r2, h.c.output_revision());
+    h.type_text("clear");
+    h.send(ConsoleMsg::Submit);
+    assert_ne!(r2, h.c.output_revision(), "clear is a change too");
+    assert_eq!(h.c.output_text(), "");
+}
+
+/// 输出到了上限,行数不变但内容变了:版本号还是要变,GUI 才会重画。
+#[test]
+fn the_revision_still_changes_when_the_output_is_at_its_cap() {
+    let mut h = H::new();
+    let (g, _) = h.run("BIG 10000").unwrap();
+    h.finish(
+        g,
+        &(0..OUTPUT_MAX_LINES)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    assert_eq!(h.c.output_len(), OUTPUT_MAX_LINES);
+    let r = h.c.output_revision();
+    h.send(ConsoleMsg::Interrupt);
+    assert_eq!(h.c.output_len(), OUTPUT_MAX_LINES);
+    assert_ne!(r, h.c.output_revision());
+}

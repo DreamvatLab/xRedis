@@ -589,3 +589,17 @@ pubsub.no_channels:
   en: "(no channels)"
 pubsub.connection_reset:
   en: "The connection was reset; the subscription to channel <%{channel}> has ended."
+pubsub.channel_placeholder:
+  en: "Channel name"
+pubsub.message_placeholder:
+  en: "Message to publish"
+pubsub.subscribe:
+  en: "Subscribe"
+pubsub.unsubscribe:
+  en: "Unsubscribe"
+pubsub.publish:
+  en: "Publish"
+pubsub.channels:
+  en: "Channels"
+console.placeholder:
+  en: "Type a command, e.g. PING"

@@ -21,6 +21,8 @@ async-channel.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
+# 消息时间显示用本地时区(格式由 xredis-app 定,这里只取时区偏移);gpui 本来就依赖它
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }

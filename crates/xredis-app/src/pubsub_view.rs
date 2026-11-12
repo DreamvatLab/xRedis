@@ -82,6 +82,27 @@ pub struct PubSubLine {
     pub text: String,
 }
 
+impl PubSubLine {
+    /// 这一行的时间文字(`HH:MM:SS.mmm`,按给定的 UTC 偏移),见 [`clock_text`]。
+    pub fn clock_text(&self, utc_offset_minutes: i32) -> String {
+        clock_text(self.at_ms, utc_offset_minutes)
+    }
+}
+
+/// 毫秒时间戳显示成 `HH:MM:SS.mmm`(按 UTC 偏移的分钟数,不显示日期:消息列表是实时看的)。
+/// 本地时区的偏移由平台层取(GUI),这里只管格式,所以测试不依赖机器的时区。
+pub fn clock_text(at_ms: i64, utc_offset_minutes: i32) -> String {
+    let local = at_ms + i64::from(utc_offset_minutes) * 60_000;
+    let day = local.rem_euclid(86_400_000);
+    let (h, m, s, ms) = (
+        day / 3_600_000,
+        day / 60_000 % 60,
+        day / 1000 % 60,
+        day % 1000,
+    );
+    format!("{h:02}:{m:02}:{s:02}.{ms:03}")
+}
+
 #[derive(Debug)]
 pub struct PubSubView {
     pub channel: String,
@@ -90,6 +111,8 @@ pub struct PubSubView {
     lines: VecDeque<PubSubLine>,
     /// 连接纪元:连接重建后加一,旧连接上迟到的结果对不上就丢弃。
     generation: u64,
+    /// 消息行每变一次加一(到了上限行数不变,GUI 靠它知道要滚到底)。
+    revision: u64,
 }
 
 impl Default for PubSubView {
@@ -106,6 +129,7 @@ impl PubSubView {
             subscription: Subscription::None,
             lines: VecDeque::new(),
             generation: 0,
+            revision: 0,
         }
     }
 
@@ -134,6 +158,21 @@ impl PubSubView {
         self.subscription == Subscription::None && !self.channel_is_empty()
     }
 
+    /// Publish 按钮可用:频道和消息都有内容(和 `update` 的判断一致)。
+    pub fn can_publish(&self) -> bool {
+        !self.channel_is_empty() && !self.message.is_empty()
+    }
+
+    /// Clear 按钮可用:有行可清。
+    pub fn can_clear(&self) -> bool {
+        !self.lines.is_empty()
+    }
+
+    /// 消息行每变一次就不一样。
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     pub fn can_unsubscribe(&self) -> bool {
         matches!(self.subscription, Subscription::Subscribed(_))
     }
@@ -156,6 +195,7 @@ impl PubSubView {
     }
 
     fn push(&mut self, at_ms: i64, text: String) {
+        self.revision += 1;
         self.lines.push_back(PubSubLine { at_ms, text });
         while self.lines.len() > LINES_MAX {
             self.lines.pop_front();
@@ -222,7 +262,10 @@ impl PubSubView {
                 id: ctx.id,
                 generation: self.generation,
             })),
-            PubSubMsg::Clear => self.lines.clear(),
+            PubSubMsg::Clear => {
+                self.lines.clear();
+                self.revision += 1;
+            }
 
             PubSubMsg::Subscribed { generation, result } => {
                 if generation != self.generation {

@@ -13,7 +13,7 @@ use xredis_core::console::split;
 
 use crate::errors::describe;
 use crate::keylist::Ctx;
-use crate::msg::{BackendCmd, Cmd};
+use crate::msg::{BackendCmd, Cmd, Msg, PlatformCmd};
 
 /// 提示符。
 pub const PROMPT: &str = "> ";
@@ -32,6 +32,9 @@ pub enum ConsoleMsg {
     // ---- 编辑 ----
     /// 在光标处插入文本(打字、粘贴)。换行换成空格:控制台只有一行。
     Insert(String),
+    /// 整行换成这段文字,光标放到末尾(R-11a:GUI 的输入框自己处理光标、选区、输入法、按单词移动和删除,
+    /// 改动后把整行同步进来)。和现在一样就什么也不做,光标不动。不动历史浏览的位置(和 `Insert` 一致)。
+    SetInput(String),
     Backspace,
     Delete,
     Left,
@@ -53,6 +56,10 @@ pub enum ConsoleMsg {
     Interrupt,
 
     // ---- 异步结果 ----
+    /// 等待动画的定时器到点(`App` 排的,GUI 只负责到点发回来)。命令还在执行就再排下一帧。
+    Tick {
+        generation: u64,
+    },
     Executed {
         generation: u64,
         result: xredis_core::Result<String>,
@@ -62,7 +69,7 @@ pub enum ConsoleMsg {
 impl ConsoleMsg {
     /// 异步结果(不是用户操作)。
     pub fn is_result(&self) -> bool {
-        matches!(self, ConsoleMsg::Executed { .. })
+        matches!(self, ConsoleMsg::Executed { .. } | ConsoleMsg::Tick { .. })
     }
 }
 
@@ -90,6 +97,8 @@ pub struct Console {
     output: VecDeque<String>,
     running: Option<Running>,
     generation: u64,
+    /// 输出每变一次加一(GUI 靠它知道要不要重设输出控件;输出到了上限时行数不变,不能靠行数)。
+    output_revision: u64,
 }
 
 impl Default for Console {
@@ -109,6 +118,7 @@ impl Console {
             output: VecDeque::new(),
             running: None,
             generation: 0,
+            output_revision: 0,
         }
     }
 
@@ -132,6 +142,23 @@ impl Console {
 
     pub fn output_len(&self) -> usize {
         self.output.len()
+    }
+
+    /// 输出每变一次就不一样。
+    pub fn output_revision(&self) -> u64 {
+        self.output_revision
+    }
+
+    /// 整段输出,行之间用换行(GUI 放进一个只读的可选中控件,P-50 的“可以选中复制”)。
+    pub fn output_text(&self) -> String {
+        let mut text = String::new();
+        for (i, line) in self.output.iter().enumerate() {
+            if i > 0 {
+                text.push('\n');
+            }
+            text.push_str(line);
+        }
+        text
     }
 
     /// 有命令在执行(这时不接受新的提交)。
@@ -222,14 +249,17 @@ impl Console {
         let mut out = ConsoleOut::default();
         match msg {
             ConsoleMsg::Insert(text) => {
-                let text: String = text
-                    .chars()
-                    .filter(|c| *c != '\0')
-                    .map(|c| if c == '\r' || c == '\n' { ' ' } else { c })
-                    .collect();
+                let text = one_line(&text);
                 let at = self.byte_at(self.cursor);
                 self.input.insert_str(at, &text);
                 self.cursor += text.chars().count();
+            }
+            ConsoleMsg::SetInput(text) => {
+                let text = one_line(&text);
+                if text != self.input {
+                    self.input = text;
+                    self.cursor = self.char_len();
+                }
             }
             ConsoleMsg::Backspace => {
                 if self.cursor > 0 {
@@ -262,6 +292,11 @@ impl Console {
                 self.reset_line();
             }
             ConsoleMsg::Submit => self.submit(ctx, &mut out),
+            ConsoleMsg::Tick { generation } => {
+                if self.running.is_some_and(|r| r.generation == generation) {
+                    out.cmds.push(tick(ctx, generation, WAIT_FRAME_MS));
+                }
+            }
             ConsoleMsg::Executed { generation, result } => {
                 self.on_executed(ctx, generation, result)
             }
@@ -306,6 +341,7 @@ impl Console {
     // ---- 执行 ----
 
     fn push_line(&mut self, line: String) {
+        self.output_revision += 1;
         self.output.push_back(line);
         while self.output.len() > OUTPUT_MAX_LINES {
             self.output.pop_front();
@@ -335,6 +371,7 @@ impl Console {
         // clear 是本地命令,不发给后端
         if line.trim().eq_ignore_ascii_case("clear") {
             self.output.clear();
+            self.output_revision += 1;
             return;
         }
         // 先在本地分词:引号没闭合、闭合引号后紧跟非空白都报错,不发送
@@ -359,6 +396,8 @@ impl Console {
             generation: self.generation,
             tokens,
         }));
+        out.cmds
+            .push(tick(ctx, self.generation, WAIT_ANIMATION_AFTER_MS));
     }
 
     fn on_executed(&mut self, ctx: &Ctx, generation: u64, result: xredis_core::Result<String>) {
@@ -374,6 +413,25 @@ impl Console {
             }
         }
     }
+}
+
+/// 控制台只有一行:换行换成空格,去掉 NUL。
+fn one_line(text: &str) -> String {
+    text.chars()
+        .filter(|c| *c != '\0')
+        .map(|c| if c == '\r' || c == '\n' { ' ' } else { c })
+        .collect()
+}
+
+/// 过 `ms` 毫秒发一条 `Tick`:动画从 500 ms 起,之后每帧一次,命令结束就不再排。
+fn tick(ctx: &Ctx, generation: u64, ms: i64) -> Cmd {
+    Cmd::Platform(PlatformCmd::After {
+        ms: ms.unsigned_abs(),
+        msg: Box::new(Msg::Console {
+            id: ctx.id,
+            msg: ConsoleMsg::Tick { generation },
+        }),
+    })
 }
 
 #[cfg(test)]

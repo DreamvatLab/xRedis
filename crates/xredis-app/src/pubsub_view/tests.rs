@@ -383,3 +383,83 @@ fn a_reset_without_a_subscription_adds_no_line() {
     h.v.reset_connection(1, "en");
     assert_eq!(h.v.line_count(), 0);
 }
+
+// ---------------------------------------------------------------------------
+// R-11b:按钮可用状态、时间文字、版本号
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_clock_text_is_hours_minutes_seconds_and_millis_in_the_given_offset() {
+    assert_eq!(clock_text(0, 0), "00:00:00.000");
+    assert_eq!(clock_text(3_723_456, 0), "01:02:03.456");
+    assert_eq!(clock_text(3_723_456, 480), "09:02:03.456");
+    assert_eq!(clock_text(0, -60), "23:00:00.000", "wraps around midnight");
+    assert_eq!(
+        clock_text(86_400_000 + 5, 0),
+        "00:00:00.005",
+        "the date is not shown"
+    );
+    assert_eq!(clock_text(-1, 0), "23:59:59.999");
+    let line = PubSubLine {
+        at_ms: 3_723_456,
+        text: "x".into(),
+    };
+    assert_eq!(line.clock_text(480), "09:02:03.456");
+}
+
+#[test]
+fn publish_needs_a_channel_and_a_message() {
+    let mut h = H::new();
+    assert!(!h.v.can_publish());
+    h.send(PubSubMsg::SetChannel("news".into()));
+    assert!(!h.v.can_publish(), "no message yet");
+    h.send(PubSubMsg::SetMessage("hi".into()));
+    assert!(h.v.can_publish());
+    h.send(PubSubMsg::SetChannel("  ".into()));
+    assert!(!h.v.can_publish(), "a blank channel does not count");
+    // 和 update 的判断一致:能发就真的发
+    h.send(PubSubMsg::SetChannel("news".into()));
+    let out = h.send(PubSubMsg::Publish);
+    assert_eq!(cmds(&out).len(), 1);
+}
+
+#[test]
+fn clear_is_only_useful_with_lines() {
+    let mut h = H::new();
+    assert!(!h.v.can_clear());
+    h.subscribe("a");
+    assert!(h.v.can_clear());
+    h.send(PubSubMsg::Clear);
+    assert!(!h.v.can_clear());
+}
+
+#[test]
+fn the_revision_changes_with_every_change_to_the_lines_even_at_the_cap() {
+    let mut h = H::new();
+    let r0 = h.v.revision();
+    h.subscribe("a");
+    let r1 = h.v.revision();
+    assert_ne!(r0, r1);
+    h.send(PubSubMsg::SetMessage("typing".into()));
+    assert_eq!(r1, h.v.revision(), "typing does not touch the lines");
+    for i in 0..LINES_MAX {
+        h.send(PubSubMsg::Incoming(PubsubMessage {
+            conn: h.id,
+            channel: b("a"),
+            payload: b(&i.to_string()),
+            at_ms: i as i64,
+        }));
+    }
+    assert_eq!(h.v.line_count(), LINES_MAX);
+    let r2 = h.v.revision();
+    h.send(PubSubMsg::Incoming(PubsubMessage {
+        conn: h.id,
+        channel: b("a"),
+        payload: b("one more"),
+        at_ms: 1,
+    }));
+    assert_eq!(h.v.line_count(), LINES_MAX);
+    assert_ne!(r2, h.v.revision());
+    h.send(PubSubMsg::Clear);
+    assert_ne!(r2, h.v.revision());
+}

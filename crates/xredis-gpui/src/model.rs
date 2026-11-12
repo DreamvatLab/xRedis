@@ -28,6 +28,10 @@ pub struct MainView {
     pub(crate) keys_ui: crate::ui::KeysUiMap,
     /// 每个 Tab 的值编辑器的输入控件(`ui/keyview.rs`)。
     pub(crate) view_ui: crate::ui::ViewUiMap,
+    /// 每个 Tab 的 Console 页的输出和输入控件(`ui/console.rs`)。
+    pub(crate) console_ui: crate::ui::ConsoleUiMap,
+    /// 每个 Tab 的 Pub/Sub 页的输入控件和列表滚动位置(`ui/pubsub.rs`)。
+    pub(crate) pubsub_ui: crate::ui::PubSubUiMap,
     _subs: Vec<Subscription>,
 }
 
@@ -69,6 +73,8 @@ impl MainView {
             dialogs: Vec::new(),
             keys_ui: Default::default(),
             view_ui: Default::default(),
+            console_ui: Default::default(),
+            pubsub_ui: Default::default(),
             _subs: vec![bounds_sub],
         };
         view.run(start, window, cx);
@@ -116,6 +122,8 @@ impl MainView {
         self.sync_toasts(window, cx);
         self.sync_keys_ui(window, cx);
         self.sync_view_ui(window, cx);
+        self.sync_console_ui(window, cx);
+        self.sync_pubsub_ui(window, cx);
         self.sync_dialogs(window, cx);
         cx.notify();
     }

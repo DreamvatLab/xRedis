@@ -9,12 +9,14 @@
 //! 只发 `Msg`,一律返回 `false`(不让组件库自己关)。
 
 use std::cell::Cell;
+use std::rc::Rc;
 
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme as _, WindowExt as _, dialog::Dialog, v_flex};
 use gpui_kit::*;
 use xredis_app::Msg;
+use xredis_app::keylist::KeysMsg;
 
 use super::editor_dialog::EditorBody;
 use super::notice_dialogs::NoticeBody;
@@ -27,24 +29,32 @@ pub enum DialogKind {
     Privacy,
     Settings,
     Editor,
+    DeleteKeys,
+    PasteKeys,
     Confirm,
     Error,
 }
 
 impl DialogKind {
     /// 同时开着时从下到上的顺序。
-    pub const ALL: [DialogKind; 6] = [
+    pub const ALL: [DialogKind; 8] = [
         DialogKind::Agreement,
         DialogKind::Privacy,
         DialogKind::Settings,
         DialogKind::Editor,
+        DialogKind::DeleteKeys,
+        DialogKind::PasteKeys,
         DialogKind::Confirm,
         DialogKind::Error,
     ];
 }
 
 /// 回车或 Esc 对应的 `Msg`(`None` 是这个键在这个弹窗里不起作用)。
-type KeyMsg = Option<fn() -> Msg>;
+type KeyMsg = Option<Rc<dyn Fn() -> Msg>>;
+
+fn key(f: impl Fn() -> Msg + 'static) -> KeyMsg {
+    Some(Rc::new(f))
+}
 
 impl MainView {
     /// `App` 里这个弹窗的状态是不是开着。
@@ -55,6 +65,10 @@ impl MainView {
             DialogKind::Privacy => app.show_privacy,
             DialogKind::Settings => app.settings_editor.is_some(),
             DialogKind::Editor => app.editor.is_some(),
+            DialogKind::DeleteKeys => app
+                .active_tab()
+                .is_some_and(|t| t.keys.confirm_delete.is_some()),
+            DialogKind::PasteKeys => app.active_tab().is_some_and(|t| t.keys.paste.is_some()),
             DialogKind::Confirm => app.confirm.is_some(),
             DialogKind::Error => app.error_dialog.is_some(),
         }
@@ -123,8 +137,8 @@ impl MainView {
                 let first = body.read(cx).first_input();
                 (
                     520.,
-                    Some(|| Msg::EditorSave),
-                    Some(|| Msg::EditorCancel),
+                    key(|| Msg::EditorSave),
+                    key(|| Msg::EditorCancel),
                     body.into(),
                     Some(first),
                 )
@@ -134,31 +148,56 @@ impl MainView {
                 let first = body.read(cx).first_input();
                 (
                     480.,
-                    Some(|| Msg::SettingsSave),
-                    Some(|| Msg::SettingsCancel),
+                    key(|| Msg::SettingsSave),
+                    key(|| Msg::SettingsCancel),
                     body.into(),
                     Some(first),
                 )
             }
+            // 破坏性确认:回车不起作用(只有点按钮才执行),Esc 取消
+            DialogKind::DeleteKeys => (
+                420.,
+                None,
+                self.app.active.and_then(|id| {
+                    key(move || Msg::Keys {
+                        id,
+                        msg: KeysMsg::CancelDelete,
+                    })
+                }),
+                notice(cx),
+                None,
+            ),
+            DialogKind::PasteKeys => (
+                440.,
+                None,
+                self.app.active.and_then(|id| {
+                    key(move || Msg::Keys {
+                        id,
+                        msg: KeysMsg::CancelPaste,
+                    })
+                }),
+                notice(cx),
+                None,
+            ),
             DialogKind::Confirm => (
                 420.,
                 // 回车不确认删除(v1 的确认框回车不起作用):只有点按钮才删,Esc 取消
                 None,
-                Some(|| Msg::ConfirmCancelled),
+                key(|| Msg::ConfirmCancelled),
                 notice(cx),
                 None,
             ),
             DialogKind::Error => (
                 480.,
-                Some(|| Msg::DismissError),
-                Some(|| Msg::DismissError),
+                key(|| Msg::DismissError),
+                key(|| Msg::DismissError),
                 notice(cx),
                 None,
             ),
             DialogKind::Privacy => (
                 640.,
-                Some(|| Msg::ShowPrivacy(false)),
-                Some(|| Msg::ShowPrivacy(false)),
+                key(|| Msg::ShowPrivacy(false)),
+                key(|| Msg::ShowPrivacy(false)),
                 notice(cx),
                 None,
             ),
@@ -168,8 +207,9 @@ impl MainView {
                 let close: KeyMsg = self
                     .app
                     .agreed()
-                    .then_some((|| Msg::ShowAgreement(false)) as fn() -> Msg);
-                (720., close, close, notice(cx), None)
+                    .then(|| key(|| Msg::ShowAgreement(false)))
+                    .flatten();
+                (720., close.clone(), close, notice(cx), None)
             }
         };
         let focus_pending = Cell::new(first_input.is_some());
@@ -180,19 +220,22 @@ impl MainView {
                 input.focus_handle(cx).focus(window, cx);
             }
             let (m1, m2) = (main.clone(), main.clone());
+            let (enter, esc) = (enter.clone(), esc.clone());
             dialog
                 .w(px(width))
                 .close_button(false)
                 .overlay_closable(false)
                 .on_ok(move |_, window, cx| {
-                    if let Some(msg) = enter {
-                        m1.update(cx, |this, cx| this.dispatch(msg(), window, cx));
+                    if let Some(msg) = &enter {
+                        let msg = msg();
+                        m1.update(cx, |this, cx| this.dispatch(msg, window, cx));
                     }
                     false
                 })
                 .on_cancel(move |_, window, cx| {
-                    if let Some(msg) = esc {
-                        m2.update(cx, |this, cx| this.dispatch(msg(), window, cx));
+                    if let Some(msg) = &esc {
+                        let msg = msg();
+                        m2.update(cx, |this, cx| this.dispatch(msg, window, cx));
                     }
                     false
                 })

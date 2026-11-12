@@ -13,7 +13,7 @@ use xredis_core::config::ConnId;
 use super::{Env, click, dispatch, exists, is_failed, read, setup, setup_unagreed, wait};
 use crate::ui::DialogKind;
 
-fn open_dialogs(cx: &mut gpui_kit::TestAppContext, env: &Env) -> Vec<DialogKind> {
+pub(super) fn open_dialogs(cx: &mut gpui_kit::TestAppContext, env: &Env) -> Vec<DialogKind> {
     cx.run_until_parked();
     cx.read(|cx| env.view.read(cx).open_dialogs().to_vec())
 }

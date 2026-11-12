@@ -3,10 +3,12 @@
 
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::*;
 use xredis_app::Msg;
 use xredis_app::app::Confirm;
+use xredis_app::keylist::KeysMsg;
 
 use super::dialogs::DialogKind;
 use super::send_to;
@@ -178,6 +180,103 @@ impl Render for NoticeBody {
                     .child(title(t("disclaimer.title")))
                     .child(document("agreement-text", sections))
                     .child(buttons)
+                    .into_any_element()
+            }
+            DialogKind::DeleteKeys => {
+                let Some((id, count)) = app
+                    .active
+                    .and_then(|id| Some((id, app.tab(id)?.keys.confirm_delete?)))
+                else {
+                    return div().into_any_element();
+                };
+                root.id("keys-delete-confirm")
+                    .test_support()
+                    .child(title(t("keys.delete_confirm.title")))
+                    .child(div().id("keys-delete-body").test_support().child(
+                        app.t_with("keys.delete_confirm.body", &[("count", &count.to_string())]),
+                    ))
+                    .child(
+                        footer()
+                            .child(
+                                Button::new("keys-delete-cancel")
+                                    .label(t("btn.cancel"))
+                                    .on_click(send_to(&main, move || Msg::Keys {
+                                        id,
+                                        msg: KeysMsg::CancelDelete,
+                                    })),
+                            )
+                            .child(
+                                Button::new("keys-delete-ok")
+                                    .danger()
+                                    .label(t("btn.delete"))
+                                    .on_click(send_to(&main, move || Msg::Keys {
+                                        id,
+                                        msg: KeysMsg::ConfirmDelete,
+                                    })),
+                            ),
+                    )
+                    .into_any_element()
+            }
+            DialogKind::PasteKeys => {
+                let Some((id, paste)) = app
+                    .active
+                    .and_then(|id| Some((id, app.tab(id)?.keys.paste.as_ref()?)))
+                else {
+                    return div().into_any_element();
+                };
+                let overwrite = paste.can_overwrite().then(|| {
+                    let main = main.clone();
+                    v_flex()
+                        .gap_1()
+                        .child(
+                            Checkbox::new("keys-paste-overwrite")
+                                .checked(paste.overwrite)
+                                .label(t("keys.paste_confirm.overwrite"))
+                                .on_click(move |on: &bool, window, cx| {
+                                    let msg = Msg::Keys {
+                                        id,
+                                        msg: KeysMsg::SetPasteOverwrite(*on),
+                                    };
+                                    main.update(cx, |this, cx| this.dispatch(msg, window, cx));
+                                }),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t("keys.paste_confirm.hint")),
+                        )
+                });
+                root.id("keys-paste-confirm")
+                    .test_support()
+                    .child(title(t("keys.paste_confirm.title")))
+                    .child(
+                        div()
+                            .id("keys-paste-summary")
+                            .test_support()
+                            .child(paste.summary(&app.lang)),
+                    )
+                    .children(overwrite)
+                    .child(
+                        footer()
+                            .child(
+                                Button::new("keys-paste-cancel")
+                                    .label(t("btn.cancel"))
+                                    .on_click(send_to(&main, move || Msg::Keys {
+                                        id,
+                                        msg: KeysMsg::CancelPaste,
+                                    })),
+                            )
+                            .child(
+                                Button::new("keys-paste-ok")
+                                    .danger()
+                                    .label(t("keys.paste"))
+                                    .on_click(send_to(&main, move || Msg::Keys {
+                                        id,
+                                        msg: KeysMsg::ConfirmPaste,
+                                    })),
+                            ),
+                    )
                     .into_any_element()
             }
             DialogKind::Settings | DialogKind::Editor => div().into_any_element(),

@@ -20,7 +20,9 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use xredis_app::Msg;
-use xredis_app::keylist::{Details, KeyRow, KeysMsg, SortColumn, SortDir, type_label};
+use xredis_app::keylist::{
+    Details, KeyRow, KeysMsg, NEW_KEY_TYPES, SortColumn, SortDir, type_label,
+};
 use xredis_app::keyview::ViewMsg;
 use xredis_core::config::ConnId;
 use xredis_core::keys::KeyType;
@@ -206,6 +208,26 @@ impl MainView {
                 }
                 menu
             });
+        // New 下拉(P-20):五种类型,选中后由 App 打开新建 key 的编辑器(画在 R-10)
+        let new_view = cx.entity();
+        let new_menu = Button::new("keys-new")
+            .label(self.app.t("keys.new"))
+            .icon(IconName::ChevronDown)
+            .disabled(!actions.new_key)
+            .dropdown_menu(move |menu, _, _| {
+                let mut menu = menu;
+                for kind in NEW_KEY_TYPES {
+                    let label = type_label(Some(&kind));
+                    menu = menu.item(PopupMenuItem::new(label).on_click(send_to(
+                        &new_view,
+                        move || Msg::View {
+                            id,
+                            msg: ViewMsg::NewKey(kind.clone()),
+                        },
+                    )));
+                }
+                menu
+            });
         h_flex()
             .id("keys-toolbar")
             .test_support()
@@ -225,6 +247,27 @@ impl MainView {
                     .label(self.app.t("keys.scan"))
                     .disabled(!actions.search)
                     .on_click(send(cx, move || keys_msg(id, KeysMsg::Search))),
+            )
+            .child(
+                Button::new("keys-delete")
+                    .danger()
+                    .label(self.app.t("btn.delete"))
+                    .disabled(!actions.delete)
+                    .on_click(send(cx, move || keys_msg(id, KeysMsg::DeleteSelected))),
+            )
+            .child(new_menu)
+            .child(div().w(px(16.)))
+            .child(
+                Button::new("keys-copy")
+                    .label(self.app.t("keys.copy"))
+                    .disabled(!actions.copy)
+                    .on_click(send(cx, move || keys_msg(id, KeysMsg::CopySelected))),
+            )
+            .child(
+                Button::new("keys-paste")
+                    .label(self.app.t("keys.paste"))
+                    .disabled(!actions.paste)
+                    .on_click(send(cx, move || keys_msg(id, KeysMsg::PasteRequested))),
             )
             .into_any_element()
     }

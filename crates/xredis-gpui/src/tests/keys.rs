@@ -462,3 +462,212 @@ fn every_keys_text_key_used_by_the_ui_exists() {
     }
     assert!(found >= 15, "scanner found only {found}");
 }
+
+// ---------------------------------------------------------------- R-09b:Delete、Copy、Paste、New
+
+use super::dialogs::open_dialogs;
+use crate::ui::DialogKind;
+
+fn select_rows(cx: &mut TestAppContext, env: &Env, ixs: &[usize]) {
+    for ix in ixs {
+        click(cx, env, &format!("key-check-{ix}"));
+    }
+}
+
+fn clipboard_text(cx: &mut TestAppContext) -> Option<String> {
+    cx.read(|cx| cx.read_from_clipboard().and_then(|i| i.text()))
+}
+
+#[gpui_kit::test]
+fn the_toolbar_has_all_actions_and_disabled_ones_do_nothing(cx: &mut TestAppContext) {
+    let (env, ids) = setup(cx, &["a"]);
+    let id = ids[0];
+    env.fake.put_many("k:", 3);
+    open(cx, &env, id);
+    for b in ["keys-delete", "keys-new", "keys-copy", "keys-paste"] {
+        assert!(exists(cx, &env, b), "{b}");
+    }
+    // 没选中:Delete、Copy 点了没反应(按钮禁用)
+    click(cx, &env, "keys-delete");
+    click(cx, &env, "keys-copy");
+    assert!(open_dialogs(cx, &env).is_empty());
+    assert_eq!(clipboard_text(cx), None);
+    assert!(!read(cx, &env, |a| a
+        .tab(id)
+        .unwrap()
+        .keys
+        .actions()
+        .delete));
+    select_rows(cx, &env, &[0]);
+    assert!(read(cx, &env, |a| a.tab(id).unwrap().keys.actions().delete));
+}
+
+#[gpui_kit::test]
+fn delete_asks_first_enter_does_not_confirm_esc_cancels_the_button_deletes(
+    cx: &mut TestAppContext,
+) {
+    let (env, ids) = setup(cx, &["a"]);
+    let id = ids[0];
+    env.fake.put_many("k:", 4);
+    open(cx, &env, id);
+    select_rows(cx, &env, &[0, 1]);
+    click(cx, &env, "keys-delete");
+    assert_eq!(open_dialogs(cx, &env), vec![DialogKind::DeleteKeys]);
+    assert_eq!(
+        read(cx, &env, |a| a.tab(id).unwrap().keys.confirm_delete),
+        Some(2)
+    );
+    for b in [
+        "keys-delete-confirm",
+        "keys-delete-body",
+        "keys-delete-ok",
+        "keys-delete-cancel",
+    ] {
+        assert!(exists(cx, &env, b), "{b}");
+    }
+    // 回车不起作用(破坏性确认)
+    press(cx, &env, "enter");
+    assert_eq!(open_dialogs(cx, &env), vec![DialogKind::DeleteKeys]);
+    assert_eq!(env.fake.keyspace_len(), 4);
+    // Esc 取消
+    press(cx, &env, "escape");
+    assert!(open_dialogs(cx, &env).is_empty());
+    assert_eq!(env.fake.keyspace_len(), 4);
+    assert_eq!(
+        keys_of(cx, &env, id, |k| k.selected_count()),
+        2,
+        "selection kept"
+    );
+
+    // 取消按钮、再确认
+    click(cx, &env, "keys-delete");
+    click(cx, &env, "keys-delete-cancel");
+    assert!(open_dialogs(cx, &env).is_empty());
+    click(cx, &env, "keys-delete");
+    click(cx, &env, "keys-delete-ok");
+    wait(cx, &env, "deleted", |a| {
+        a.tab(id).unwrap().keys.busy.is_none() && a.tab(id).unwrap().keys.loaded_count() == 2
+    });
+    assert!(open_dialogs(cx, &env).is_empty());
+    assert_eq!(env.fake.keyspace_len(), 2);
+    assert!(!env.fake.has_key(b"k:0") && !env.fake.has_key(b"k:1"));
+    assert_eq!(names(cx, &env, id), vec!["k:2", "k:3"]);
+}
+
+#[gpui_kit::test]
+fn copy_then_paste_with_and_without_conflicts(cx: &mut TestAppContext) {
+    let (env, ids) = setup(cx, &["a"]);
+    let id = ids[0];
+    env.fake.put_many("k:", 3);
+    open(cx, &env, id);
+    select_rows(cx, &env, &[0, 1]);
+    click(cx, &env, "keys-copy");
+    wait(cx, &env, "copied", |a| {
+        a.tab(id).unwrap().keys.busy.is_none()
+    });
+    let text = clipboard_text(cx).expect("text on the clipboard");
+    assert!(text.starts_with("REDIS:"), "{text}");
+
+    // 两个 key 都还在:确认框说明“都已存在”,有覆盖选项(默认不勾)
+    click(cx, &env, "keys-paste");
+    assert_eq!(open_dialogs(cx, &env), vec![DialogKind::PasteKeys]);
+    assert_eq!(
+        read(cx, &env, |a| a
+            .tab(id)
+            .unwrap()
+            .keys
+            .paste
+            .as_ref()
+            .map(|p| (p.total, p.existing, p.overwrite))),
+        Some((2, 2, false))
+    );
+    assert!(exists(cx, &env, "keys-paste-overwrite"));
+    assert!(exists(cx, &env, "keys-paste-summary"));
+    // 回车不起作用,Esc 取消,什么都没写
+    press(cx, &env, "enter");
+    assert_eq!(open_dialogs(cx, &env), vec![DialogKind::PasteKeys]);
+    press(cx, &env, "escape");
+    assert!(open_dialogs(cx, &env).is_empty());
+    assert!(!env.fake.calls().iter().any(|c| c.starts_with("paste_keys")));
+
+    // 不勾覆盖直接粘贴:有冲突整体拒绝,弹窗关闭,没写
+    click(cx, &env, "keys-paste");
+    click(cx, &env, "keys-paste-ok");
+    wait(cx, &env, "paste rejected", |a| {
+        a.tab(id).unwrap().keys.busy.is_none()
+    });
+    assert!(open_dialogs(cx, &env).is_empty());
+    assert_eq!(env.fake.keyspace_len(), 3);
+
+    // 勾上覆盖后粘贴成功
+    click(cx, &env, "keys-paste");
+    click(cx, &env, "keys-paste-overwrite");
+    assert!(read(cx, &env, |a| a
+        .tab(id)
+        .unwrap()
+        .keys
+        .paste
+        .as_ref()
+        .unwrap()
+        .overwrite));
+    click(cx, &env, "keys-paste-ok");
+    wait(cx, &env, "pasted", |a| {
+        a.tab(id).unwrap().keys.busy.is_none()
+    });
+    assert!(
+        env.fake
+            .calls()
+            .iter()
+            .any(|c| c.ends_with(":true") && c.starts_with("paste_keys"))
+    );
+
+    // 删掉再粘贴:没有同名 key,不显示覆盖选项,确认后恢复
+    env.fake.remove_key(b"k:0");
+    env.fake.remove_key(b"k:1");
+    click(cx, &env, "keys-paste");
+    assert!(!exists(cx, &env, "keys-paste-overwrite"));
+    click(cx, &env, "keys-paste-ok");
+    wait(cx, &env, "restored", |a| {
+        a.tab(id).unwrap().keys.busy.is_none() && a.tab(id).unwrap().keys.loaded_count() == 3
+    });
+    assert!(env.fake.has_key(b"k:0") && env.fake.has_key(b"k:1"));
+}
+
+#[gpui_kit::test]
+fn pasting_an_empty_clipboard_shows_no_dialog(cx: &mut TestAppContext) {
+    let (env, ids) = setup(cx, &["a"]);
+    let id = ids[0];
+    env.fake.put_many("k:", 1);
+    open(cx, &env, id);
+    cx.update(|cx| {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("not a key dump".into()))
+    });
+    click(cx, &env, "keys-paste");
+    cx.run_until_parked();
+    assert!(open_dialogs(cx, &env).is_empty());
+    assert!(keys_of(cx, &env, id, |k| k.paste.is_none()));
+}
+
+#[gpui_kit::test]
+fn new_key_opens_the_editor_view_for_the_chosen_type(cx: &mut TestAppContext) {
+    let (env, ids) = setup(cx, &["a"]);
+    let id = ids[0];
+    open(cx, &env, id);
+    // 菜单项在无头里点不到:用 dispatch 发菜单项会发的那条 Msg
+    dispatch(
+        cx,
+        &env,
+        Msg::View {
+            id,
+            msg: xredis_app::keyview::ViewMsg::NewKey(KeyType::Hash),
+        },
+    );
+    cx.run_until_parked();
+    assert!(read(cx, &env, |a| a.tab(id).unwrap().view.is_some()));
+    assert!(
+        exists(cx, &env, "keyview-placeholder"),
+        "R-10 draws the editor"
+    );
+    click(cx, &env, "keyview-close");
+    assert!(exists(cx, &env, "keys-new"));
+}

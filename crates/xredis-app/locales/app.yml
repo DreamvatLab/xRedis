@@ -109,6 +109,8 @@ editor.client_key:
   en: "Client Key"
 editor.client_key_hint:
   en: "Key has a password? Decrypt it first: openssl pkcs8 -topk8 -nocrypt -in client.key -out decrypted.key"
+editor.file_none:
+  en: "Not set"
 
 # ---- 表单校验 ----
 validation.host_required:

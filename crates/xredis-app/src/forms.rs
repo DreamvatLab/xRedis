@@ -267,4 +267,9 @@ impl SettingsEditor {
     pub fn errors(&self, base: &Settings) -> Vec<FormError> {
         self.apply(base).err().unwrap_or_default()
     }
+
+    /// 保存按钮能不能点:输入合法且不在保存中。
+    pub fn can_save(&self, base: &Settings) -> bool {
+        !self.saving && self.apply(base).is_ok()
+    }
 }

@@ -22,6 +22,8 @@ pub struct MainView {
     runtime: Runtime,
     /// 已经弹过的 toast(`App` 里的 toast 在用户关掉或自动消失之前一直在)。
     shown_toasts: HashSet<u64>,
+    /// 界面上开着的弹窗,从下到上(和 `App` 的状态同步,见 `ui/dialogs.rs`)。
+    pub(crate) dialogs: Vec<crate::ui::DialogKind>,
     _subs: Vec<Subscription>,
 }
 
@@ -60,6 +62,7 @@ impl MainView {
             app,
             runtime,
             shown_toasts: HashSet::new(),
+            dialogs: Vec::new(),
             _subs: vec![bounds_sub],
         };
         view.run(start, window, cx);
@@ -105,6 +108,7 @@ impl MainView {
 
     fn after_batch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sync_toasts(window, cx);
+        self.sync_dialogs(window, cx);
         cx.notify();
     }
 

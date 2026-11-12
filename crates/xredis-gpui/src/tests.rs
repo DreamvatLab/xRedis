@@ -21,8 +21,18 @@ struct Env {
     fake: Arc<FakeBackend>,
 }
 
+mod dialogs;
+
 /// 开一个窗口,启动并同意协议,等到启动完成。
 fn setup(cx: &mut TestAppContext, names: &[&str]) -> (Env, Vec<ConnId>) {
+    let (env, ids) = setup_unagreed(cx, names);
+    dispatch(cx, &env, Msg::AgreeDisclaimer);
+    wait(cx, &env, "agreement accepted", |app| !app.blocked());
+    (env, ids)
+}
+
+/// 开一个窗口,等到启动完成;协议还没同意(首次启动)。
+fn setup_unagreed(cx: &mut TestAppContext, names: &[&str]) -> (Env, Vec<ConnId>) {
     cx.update(gpui_kit::init);
     let fake = FakeBackend::new();
     let ids: Vec<ConnId> = names
@@ -51,8 +61,6 @@ fn setup(cx: &mut TestAppContext, names: &[&str]) -> (Env, Vec<ConnId>) {
     });
     let env = Env { window, view, fake };
     wait(cx, &env, "startup", |app| app.started);
-    dispatch(cx, &env, Msg::AgreeDisclaimer);
-    wait(cx, &env, "agreement accepted", |app| !app.blocked());
     (env, ids)
 }
 
@@ -157,6 +165,8 @@ fn a_failed_connection_shows_the_reason_and_retry_recovers(cx: &mut TestAppConte
     click(cx, &env, &format!("conn-{}", ids[0]));
     wait(cx, &env, "failed", is_failed);
     assert!(exists(cx, &env, "tab-failed"));
+    // 错误框(R-08b)是模态的,盖住了重试按钮:先关掉它
+    click(cx, &env, "error-ok");
     assert!(exists(cx, &env, &format!("retry-{}", ids[0])));
     click(cx, &env, &format!("retry-{}", ids[0]));
     wait(cx, &env, "ready after retry", is_ready);

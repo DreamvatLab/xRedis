@@ -3,7 +3,11 @@
 //! 每个可点的控件都有稳定的 id(`menu-file`、`conn-<连接 id>`、`tab-<连接 id>`、`add-connection`……),
 //! 无头测试靠它们找元素。
 
+mod dialogs;
+mod editor_dialog;
 mod messagebar;
+mod notice_dialogs;
+mod settings_dialog;
 mod sidebar;
 mod tabs;
 mod topbar;
@@ -13,6 +17,8 @@ use gpui_kit::*;
 use xredis_app::Msg;
 
 use crate::model::MainView;
+
+pub use dialogs::DialogKind;
 
 impl Render for MainView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

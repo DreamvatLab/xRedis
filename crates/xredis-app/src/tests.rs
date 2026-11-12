@@ -980,6 +980,26 @@ fn p60_settings_validation() {
     );
 }
 
+/// P-60:保存按钮能不能点由 App 说了算(GUI 不重复判断):输入合法且不在保存中。
+#[test]
+fn p60_settings_can_save_follows_validity_and_saving() {
+    let mut app = ready_app(vec![]);
+    app.update(Msg::OpenSettings);
+    let can = |app: &App| {
+        app.settings_editor
+            .as_ref()
+            .unwrap()
+            .can_save(&app.settings)
+    };
+    assert!(can(&app), "the defaults are valid");
+    app.update(Msg::SettingsSetText(SettingsText::ScanBatch, "99".into()));
+    assert!(!can(&app), "invalid input disables saving");
+    app.update(Msg::SettingsSetText(SettingsText::ScanBatch, "800".into()));
+    assert!(can(&app));
+    app.update(Msg::SettingsSave);
+    assert!(!can(&app), "no saving while a save is in flight");
+}
+
 /// P-60:保存只改设置面板能改的字段,窗口尺寸、折叠状态、协议记录保持不变;
 /// 成功之后才变成正式设置并关面板;失败时面板留着。
 #[test]

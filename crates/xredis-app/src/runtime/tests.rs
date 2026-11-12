@@ -685,3 +685,56 @@ fn platform_commands_are_not_the_runtimes_business() {
     let c = Cmd::Platform(PlatformCmd::Exit);
     assert!(matches!(c, Cmd::Platform(_)));
 }
+
+/// 启动前同步取的窗口尺寸:新配置是默认值,保存后(包括重新打开配置)读到保存的值。
+#[tokio::test(flavor = "multi_thread")]
+async fn saved_window_follows_the_config_across_reopening() {
+    let tmp = tempfile::tempdir().unwrap();
+    let open =
+        || CoreBackend::open(tmp.path().to_path_buf(), Arc::new(MemoryStore::new()), None).unwrap();
+    let backend = open();
+    let defaults = backend.saved_window();
+    assert_ne!(defaults, (1234, 777, true));
+    backend.save_window_size(1234, 777, true).await.unwrap();
+    assert_eq!(backend.saved_window(), (1234, 777, true));
+    drop(backend);
+    assert_eq!(open().saved_window(), (1234, 777, true));
+}
+
+/// 配置里的语言不可用时,启动用的是回落后的默认语言(和 `App` 解析的一致)。
+#[tokio::test(flavor = "multi_thread")]
+async fn saved_language_is_resolved_to_an_available_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let backend =
+        CoreBackend::open(tmp.path().to_path_buf(), Arc::new(MemoryStore::new()), None).unwrap();
+    let default = backend.saved_language();
+    assert!(crate::i18n::is_available(&default));
+
+    let settings = xredis_core::config::Settings {
+        language: "xx-NOPE".into(),
+        ..Default::default()
+    };
+    backend.save_settings(settings).await.unwrap();
+    assert_eq!(backend.saved_language(), default, "unknown falls back");
+    // (只带了一种语言,可用语言原样返回的分支由 i18n 自己的测试覆盖)
+}
+
+/// `Runtime::inline`:命令在调用线程上同步跑完,结果已经在 channel 里;没有结果的命令不发消息。
+#[test]
+fn inline_runtime_runs_commands_synchronously() {
+    let fake = FakeBackend::new();
+    let id = fake.add_connection("a", 0);
+    let (tx, rx) = async_channel::unbounded();
+    let rt = Runtime::inline(fake, tx).unwrap();
+    rt.spawn(BackendCmd::Connect { id, epoch: 7 });
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Msg::Connected {
+            epoch: 7,
+            result: Ok(_),
+            ..
+        })
+    ));
+    rt.spawn(BackendCmd::CloseConnection(id));
+    assert!(rx.try_recv().is_err());
+}

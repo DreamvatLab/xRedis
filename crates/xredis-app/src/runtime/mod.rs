@@ -14,6 +14,7 @@ use crate::pubsub_view::PubSubMsg;
 pub struct Runtime {
     /// `Option` 是为了 `Drop` 里能把它取出来 `shutdown_background`(在异步环境里丢弃 runtime 会 panic)。
     rt: Option<tokio::runtime::Runtime>,
+    inline: bool,
     backend: Arc<dyn Backend>,
     tx: async_channel::Sender<Msg>,
 }
@@ -25,6 +26,27 @@ impl Runtime {
             .thread_name("xredis-rt")
             .enable_all()
             .build()?;
+        Ok(Self::with_rt(rt, false, backend, tx))
+    }
+
+    /// 同步执行版:`spawn` 在调用线程上跑完命令再返回,结果已经在 channel 里。给 GUI 的确定性测试用
+    /// (GPUI 的测试调度器不许别的线程有动静);生产代码用 [`Runtime::new`]。
+    pub fn inline(
+        backend: Arc<dyn Backend>,
+        tx: async_channel::Sender<Msg>,
+    ) -> std::io::Result<Self> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        Ok(Self::with_rt(rt, true, backend, tx))
+    }
+
+    fn with_rt(
+        rt: tokio::runtime::Runtime,
+        inline: bool,
+        backend: Arc<dyn Backend>,
+        tx: async_channel::Sender<Msg>,
+    ) -> Self {
         // 订阅收到的消息:按连接分流,变成 Msg 发回(无界 channel,不会阻塞 core 的监听任务)
         let sink_tx = tx.clone();
         backend.set_message_sink(Arc::new(move |m| {
@@ -33,17 +55,24 @@ impl Runtime {
                 msg: PubSubMsg::Incoming(m),
             });
         }));
-        Ok(Self {
+        Self {
             rt: Some(rt),
+            inline,
             backend,
             tx,
-        })
+        }
     }
 
     /// 在后台执行,不阻塞调用方;结果(如果有)发进 channel。
     pub fn spawn(&self, cmd: BackendCmd) {
         let backend = self.backend.clone();
         let tx = self.tx.clone();
+        if self.inline {
+            if let Some(msg) = self.rt().block_on(execute(backend.as_ref(), cmd)) {
+                let _ = tx.try_send(msg);
+            }
+            return;
+        }
         self.rt().spawn(async move {
             if let Some(msg) = execute(backend.as_ref(), cmd).await {
                 // 接收方没了(程序在退出)就算了

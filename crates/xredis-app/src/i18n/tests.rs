@@ -5,8 +5,8 @@ use std::path::Path;
 
 use super::*;
 
-fn lock() -> std::sync::MutexGuard<'static, ()> {
-    super::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+fn lock() -> tokio::sync::MutexGuard<'static, ()> {
+    super::TEST_LOCK.blocking_lock()
 }
 
 fn write(dir: &Path, name: &str, content: &str) {

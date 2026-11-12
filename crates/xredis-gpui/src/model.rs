@@ -154,10 +154,8 @@ impl MainView {
                 );
             }
             PlatformCmd::ReadClipboard { id } => {
-                let result = cx
-                    .read_from_clipboard()
-                    .and_then(|item| item.text())
-                    .ok_or_else(|| "the clipboard is empty or does not contain text".to_string());
+                // GPUI 的读剪贴板没有错误返回:读不到就是"没有文本",只报告这个事实,措辞归 App
+                let result = Ok(cx.read_from_clipboard().and_then(|item| item.text()));
                 self.apply(
                     Msg::Keys {
                         id,

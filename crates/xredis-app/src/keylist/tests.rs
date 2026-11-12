@@ -1264,7 +1264,7 @@ fn p42_pasting_something_that_is_not_redis_data_is_rejected() {
         [PlatformCmd::ReadClipboard { .. }]
     ));
     assert_eq!(h.list.busy, Some(Busy::Pasting));
-    let out = h.send(KeysMsg::ClipboardRead(Ok("just some text".into())));
+    let out = h.send(KeysMsg::ClipboardRead(Ok(Some("just some text".into()))));
     assert!(h.list.paste.is_none());
     assert_eq!(h.list.busy, None);
     assert_eq!(last_note(&out).level, Level::Error);
@@ -1283,6 +1283,23 @@ fn l13_a_clipboard_read_failure_is_reported() {
     assert!(last_note(&out).text.contains("the clipboard is busy"));
 }
 
+/// R-08c:剪贴板里没有文本不是平台错误:GUI 只报告"没有"(`Ok(None)`),措辞由 App 按界面语言翻译。
+#[test]
+fn r08c_an_empty_clipboard_is_reported_by_the_app_not_the_platform_layer() {
+    let mut h = H::new();
+    h.search_with(&["a"], 0);
+    h.send(KeysMsg::PasteRequested);
+    let out = h.send(KeysMsg::ClipboardRead(Ok(None)));
+    assert_eq!(h.list.busy, None);
+    assert_eq!(last_note(&out).level, Level::Error);
+    assert!(
+        last_note(&out).text.contains("clipboard is empty"),
+        "{}",
+        last_note(&out).text
+    );
+    assert!(!last_note(&out).text.contains("Could not read"));
+}
+
 /// R-07d:读到 `REDIS:` 数据后不直接弹框,先让后端解码并查冲突(`PreviewPaste`),
 /// 预检结果回来才弹,框里带“共 N 个,其中 M 个已存在”。
 #[test]
@@ -1290,7 +1307,7 @@ fn r07d_the_confirmation_waits_for_the_preview_and_shows_the_counts() {
     let mut h = H::new();
     h.search_with(&["a"], 0);
     h.send(KeysMsg::PasteRequested);
-    let out = h.send(KeysMsg::ClipboardRead(Ok("REDIS:abc".into())));
+    let out = h.send(KeysMsg::ClipboardRead(Ok(Some("REDIS:abc".into()))));
     assert!(matches!(
         backend(&out)[..],
         [BackendCmd::PreviewPaste { .. }]
@@ -1316,7 +1333,7 @@ fn r07d_no_overwrite_option_when_nothing_exists() {
     let mut h = H::new();
     h.search_with(&["a"], 0);
     h.send(KeysMsg::PasteRequested);
-    h.send(KeysMsg::ClipboardRead(Ok("REDIS:abc".into())));
+    h.send(KeysMsg::ClipboardRead(Ok(Some("REDIS:abc".into()))));
     h.send(checked(3, 0));
     assert!(!h.list.paste.as_ref().unwrap().can_overwrite());
     h.send(KeysMsg::SetPasteOverwrite(true));
@@ -1348,7 +1365,7 @@ fn r07d_preview_failures_are_reported_without_a_dialog() {
         let mut h = H::new();
         h.search_with(&["a"], 0);
         h.send(KeysMsg::PasteRequested);
-        h.send(KeysMsg::ClipboardRead(Ok("REDIS:abc".into())));
+        h.send(KeysMsg::ClipboardRead(Ok(Some("REDIS:abc".into()))));
         let out = h.send(KeysMsg::PasteChecked {
             text: "REDIS:abc".into(),
             result: Err(err),
@@ -1379,7 +1396,7 @@ fn p42_the_paste_confirmation_defaults_to_not_overwriting() {
     let mut h = H::new();
     h.search_with(&["a"], 0);
     h.send(KeysMsg::PasteRequested);
-    h.send(KeysMsg::ClipboardRead(Ok("REDIS:abc".into())));
+    h.send(KeysMsg::ClipboardRead(Ok(Some("REDIS:abc".into()))));
     h.send(checked(3, 2));
     let p = h.list.paste.clone().expect("a confirmation");
     assert!(!p.overwrite, "must not overwrite by default");
@@ -1407,7 +1424,7 @@ fn p42_the_paste_confirmation_defaults_to_not_overwriting() {
     let mut h = H::new();
     h.search_with(&["a"], 0);
     h.send(KeysMsg::PasteRequested);
-    h.send(KeysMsg::ClipboardRead(Ok("REDIS:abc".into())));
+    h.send(KeysMsg::ClipboardRead(Ok(Some("REDIS:abc".into()))));
     h.send(checked(3, 2));
     h.send(KeysMsg::SetPasteOverwrite(true));
     let out = h.send(KeysMsg::ConfirmPaste);
@@ -1423,7 +1440,7 @@ fn p42_the_paste_confirmation_defaults_to_not_overwriting() {
     let mut h = H::new();
     h.search_with(&["a"], 0);
     h.send(KeysMsg::PasteRequested);
-    h.send(KeysMsg::ClipboardRead(Ok("REDIS:abc".into())));
+    h.send(KeysMsg::ClipboardRead(Ok(Some("REDIS:abc".into()))));
     h.send(checked(3, 2));
     h.send(KeysMsg::CancelPaste);
     assert!(h.list.paste.is_none() && h.list.busy.is_none());
@@ -1436,7 +1453,7 @@ fn p42_a_successful_paste_refreshes_the_count_and_searches_again() {
     let mut h = H::new();
     h.search_with(&["a"], 0);
     h.send(KeysMsg::PasteRequested);
-    h.send(KeysMsg::ClipboardRead(Ok("REDIS:abc".into())));
+    h.send(KeysMsg::ClipboardRead(Ok(Some("REDIS:abc".into()))));
     h.send(checked(3, 2));
     h.send(KeysMsg::ConfirmPaste);
     let out = h.send(KeysMsg::Pasted(Ok(PasteOutcome { count: 4 })));
@@ -1463,7 +1480,7 @@ fn p42_paste_failures_report_and_refresh_only_when_something_was_written() {
     h.search_with(&["a"], 0);
     let paste = |h: &mut H| {
         h.send(KeysMsg::PasteRequested);
-        h.send(KeysMsg::ClipboardRead(Ok("REDIS:abc".into())));
+        h.send(KeysMsg::ClipboardRead(Ok(Some("REDIS:abc".into()))));
         h.send(checked(3, 2));
         h.send(KeysMsg::ConfirmPaste);
     };

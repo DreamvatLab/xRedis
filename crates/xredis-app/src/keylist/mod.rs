@@ -79,7 +79,8 @@ pub enum KeysMsg {
     DbSize(Result<u64>),
     Copied(Result<CopyOutcome>),
     ClipboardWritten(std::result::Result<(), String>),
-    ClipboardRead(std::result::Result<String, String>),
+    /// `Ok(None)`:剪贴板是空的或里面没有文本(事实,措辞由 App 翻译);`Err`:平台读取出错。
+    ClipboardRead(std::result::Result<Option<String>, String>),
     /// 粘贴预检的结果(R-07d)。
     PasteChecked {
         text: String,
@@ -925,7 +926,7 @@ impl KeyList {
     fn on_clipboard_read(
         &mut self,
         ctx: &Ctx,
-        result: std::result::Result<String, String>,
+        result: std::result::Result<Option<String>, String>,
         out: &mut Out,
     ) {
         if self.busy != Some(Busy::Pasting) {
@@ -938,13 +939,14 @@ impl KeyList {
                 tr_with(ctx.lang, "err.clipboard_read", &[("reason", &reason)]),
                 true,
             ),
-            Ok(text) if !text.starts_with(CLIPBOARD_PREFIX) => out.note(
+            Ok(None) => out.note(Level::Error, tr(ctx.lang, "err.clipboard_empty"), true),
+            Ok(Some(text)) if !text.starts_with(CLIPBOARD_PREFIX) => out.note(
                 Level::Error,
                 describe(ctx.lang, &Error::ClipboardNotRedis),
                 true,
             ),
             // 先让后端解码并查冲突,再弹确认框;解码失败、超限直接报错,不弹框(R-07d)
-            Ok(text) => {
+            Ok(Some(text)) => {
                 self.busy = Some(Busy::Pasting);
                 out.cmds
                     .push(Cmd::Backend(BackendCmd::PreviewPaste { id: ctx.id, text }));

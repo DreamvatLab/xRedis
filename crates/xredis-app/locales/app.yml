@@ -375,6 +375,8 @@ err.clipboard_write:
   en: "Could not write to the clipboard: %{reason}. It may be held by another app (an input method, a clipboard manager, remote desktop). Try again."
 err.clipboard_read:
   en: "Could not read the clipboard: %{reason}. It may be held by another app (an input method, a clipboard manager, remote desktop). Try again."
+err.clipboard_empty:
+  en: "The clipboard is empty or does not contain text."
 
 # ---- 启动警告和导入提示(core 的警告是结构化的,这里按种类翻译) ----
 warn.config_corrupt_backed_up:

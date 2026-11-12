@@ -237,9 +237,11 @@ pub fn export_template(target: &str) -> String {
     out
 }
 
-/// 全局语言包是共享状态:所有会加载用户语言包的测试(i18n 的、App 的)用这把锁串行。
+/// 全局语言包是共享状态:所有会加载用户语言包的测试(i18n 的、App 的、调 `CoreBackend::startup()` 的)
+/// 用这把锁串行。用 tokio 的锁:异步测试可以 `lock().await` 跨 await 持有,同步测试用 `blocking_lock()`。
+/// tokio 的锁不会中毒,一个测试 panic 不连累别的。
 #[cfg(test)]
-pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[cfg(test)]
 mod tests;

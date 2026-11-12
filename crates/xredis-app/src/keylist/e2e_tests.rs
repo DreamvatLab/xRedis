@@ -388,8 +388,7 @@ async fn l13_pasting_from_an_empty_clipboard_reports_instead_of_failing_silently
     assert!(
         message_texts(&h)
             .iter()
-            .any(|t| t.contains("Could not read the clipboard")
-                && t.contains("the clipboard is empty")),
+            .any(|t| t.contains("The clipboard is empty")),
         "{:?}",
         message_texts(&h)
     );

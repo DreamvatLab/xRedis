@@ -1795,9 +1795,7 @@ fn paste_conflicts_list_is_capped_and_binary_names_do_not_panic() {
 /// 再切回英文。这条路径要用到全局语言包,所以和 i18n 的测试共用一把锁。
 #[test]
 fn switching_to_an_available_language_translates_the_ui_and_tells_the_gui() {
-    let _g = crate::i18n::TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _g = crate::i18n::TEST_LOCK.blocking_lock();
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
         tmp.path().join("zh-CN.yml"),

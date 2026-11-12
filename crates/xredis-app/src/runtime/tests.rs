@@ -167,10 +167,7 @@ impl Harness {
                     });
                 }
                 Cmd::Platform(PlatformCmd::ReadClipboard { id }) => {
-                    let r = self
-                        .clipboard
-                        .clone()
-                        .ok_or_else(|| "the clipboard is empty".to_string());
+                    let r = Ok(self.clipboard.clone());
                     self.feed(Msg::Keys {
                         id,
                         msg: KeysMsg::ClipboardRead(r),
@@ -448,6 +445,8 @@ fn draft(name: &str) -> ConnectionDraft {
 /// 之后还能保存和读取连接。
 #[tokio::test(flavor = "multi_thread")]
 async fn p66_an_unusable_config_dir_falls_back_to_a_temporary_one_with_a_warning() {
+    // startup() 会重载全局语言包,和加载语言包的测试串行
+    let _lang = crate::i18n::TEST_LOCK.lock().await;
     let tmp = tempfile::tempdir().unwrap();
     let occupied = tmp.path().join("v2");
     std::fs::write(&occupied, b"i am a file, not a directory").unwrap();
@@ -480,6 +479,8 @@ async fn p66_an_unusable_config_dir_falls_back_to_a_temporary_one_with_a_warning
 /// P-66:配置文件损坏:改名留存,用默认值继续,警告带给界面。
 #[tokio::test(flavor = "multi_thread")]
 async fn p66_a_corrupt_config_file_is_kept_aside_and_reported() {
+    // startup() 会重载全局语言包,和加载语言包的测试串行
+    let _lang = crate::i18n::TEST_LOCK.lock().await;
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("config.json"), b"{ broken").unwrap();
     let backend =
@@ -504,6 +505,8 @@ async fn p66_a_corrupt_config_file_is_kept_aside_and_reported() {
 /// 密码降级到内存,保存连接时密码照样"存"上了(内存里),界面提示一次。
 #[tokio::test(flavor = "multi_thread")]
 async fn a_broken_keystore_is_detected_at_startup_and_falls_back_to_memory() {
+    // startup() 会重载全局语言包,和加载语言包的测试串行
+    let _lang = crate::i18n::TEST_LOCK.lock().await;
     let tmp = tempfile::tempdir().unwrap();
     let backend =
         CoreBackend::open(tmp.path().to_path_buf(), Arc::new(BrokenKeyStore), None).unwrap();
@@ -527,6 +530,8 @@ async fn a_broken_keystore_is_detected_at_startup_and_falls_back_to_memory() {
 /// 钥匙串正常时不降级,启动结果里没有降级标志。
 #[tokio::test(flavor = "multi_thread")]
 async fn a_working_keystore_is_not_reported_as_degraded() {
+    // startup() 会重载全局语言包,和加载语言包的测试串行
+    let _lang = crate::i18n::TEST_LOCK.lock().await;
     let tmp = tempfile::tempdir().unwrap();
     let backend =
         CoreBackend::open(tmp.path().to_path_buf(), Arc::new(MemoryStore::new()), None).unwrap();
@@ -536,6 +541,8 @@ async fn a_working_keystore_is_not_reported_as_degraded() {
 /// 第一次启动时从 v1 导入(只读 v1 的文件);之后不再导入。
 #[tokio::test(flavor = "multi_thread")]
 async fn first_start_imports_from_v1_once_and_never_writes_the_v1_file() {
+    // startup() 会重载全局语言包,和加载语言包的测试串行
+    let _lang = crate::i18n::TEST_LOCK.lock().await;
     let tmp = tempfile::tempdir().unwrap();
     let v1 = tmp.path().join("v1-config.json");
     let (id1, id2) = (ConnId::new(), ConnId::new());
@@ -589,10 +596,7 @@ async fn first_start_imports_from_v1_once_and_never_writes_the_v1_file() {
 /// 启动时加载用户语言包,结果带给界面。
 #[test]
 fn startup_loads_user_language_packs_from_the_config_dir() {
-    // 同步测试:std 的锁不能跨 await 持有,所以在锁里自己起一个 runtime block_on
-    let _g = crate::i18n::TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _g = crate::i18n::TEST_LOCK.blocking_lock();
     let tmp = tempfile::tempdir().unwrap();
     let locales = tmp.path().join("locales");
     std::fs::create_dir_all(&locales).unwrap();

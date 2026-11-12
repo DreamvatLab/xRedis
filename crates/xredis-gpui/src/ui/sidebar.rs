@@ -4,13 +4,13 @@
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::label::Label;
-use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
+use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, IconName, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use xredis_app::Msg;
 
-use super::{send, send_to};
+use super::{send, send_to, text_tooltip};
 use crate::model::MainView;
 
 const EXPANDED_WIDTH: f32 = 260.0;
@@ -54,57 +54,74 @@ impl MainView {
                 .child(add)
         };
 
-        let rows =
-            self.app.connections.iter().map(|c| {
-                let id = c.id;
-                let open = self.app.tab(id).is_some();
-                let active = self.app.active == Some(id);
-                let (edit, delete) = (self.app.t("conn.menu.edit"), self.app.t("conn.menu.delete"));
-                let menu_view = view.clone();
-                let name = self.app.connection_name(id);
-                let subtitle = self.app.connection_subtitle(id);
-                let initial: String = name.chars().next().map(String::from).unwrap_or_default();
-                let row = div()
-                    .id(SharedString::from(format!("conn-{id}")))
-                    .test_support()
-                    .px_2()
-                    .py_1()
-                    .rounded(theme.radius)
-                    .cursor_pointer()
-                    .when(active, |d| d.bg(theme.list_active))
-                    .when(!active, |d| d.hover(|d| d.bg(theme.list_hover)))
-                    .on_click(send(cx, move || Msg::OpenConnection(id)))
-                    .context_menu(move |menu, _, _| {
-                        menu.item(
-                            PopupMenuItem::new(edit.clone())
-                                .on_click(send_to(&menu_view, move || Msg::OpenEditor(Some(id)))),
+        let rows = self.app.connections.iter().map(|c| {
+            let id = c.id;
+            let open = self.app.tab(id).is_some();
+            let active = self.app.active == Some(id);
+            let (edit, delete) = (self.app.t("conn.menu.edit"), self.app.t("conn.menu.delete"));
+            let menu_view = view.clone();
+            let button_menu = (edit.clone(), delete.clone(), view.clone());
+            let name = self.app.connection_name(id);
+            let subtitle = self.app.connection_subtitle(id);
+            let initial: String = name.chars().next().map(String::from).unwrap_or_default();
+            let row = div()
+                .id(SharedString::from(format!("conn-{id}")))
+                .test_support()
+                .px_2()
+                .py_1()
+                .rounded(theme.radius)
+                .cursor_pointer()
+                .when(active, |d| d.bg(theme.list_active))
+                .when(!active, |d| d.hover(|d| d.bg(theme.list_hover)))
+                .tooltip(text_tooltip(name.clone()))
+                .on_click(send(cx, move || Msg::OpenConnection(id)))
+                .context_menu(move |menu, _, _| {
+                    connection_menu(menu, &menu_view, id, &edit, &delete)
+                });
+            if collapsed {
+                row.child(div().w_full().text_center().child(initial))
+            } else {
+                let (edit, delete, menu_view) = button_menu;
+                row.child(
+                    h_flex()
+                        .gap_1()
+                        .items_center()
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .child(
+                                    Label::new(name)
+                                        .font_weight(if open {
+                                            FontWeight::SEMIBOLD
+                                        } else {
+                                            FontWeight::NORMAL
+                                        })
+                                        .overflow_hidden()
+                                        .text_ellipsis(),
+                                )
+                                .children(subtitle.map(|s| {
+                                    Label::new(s).text_xs().text_color(theme.muted_foreground)
+                                })),
                         )
-                        .item(
-                            PopupMenuItem::new(delete.clone())
-                                .on_click(send_to(&menu_view, move || Msg::DeleteRequested(id))),
-                        )
-                    });
-                if collapsed {
-                    row.child(div().w_full().text_center().child(initial))
-                } else {
-                    row.child(
-                        v_flex()
-                            .child(
-                                Label::new(name)
-                                    .font_weight(if open {
-                                        FontWeight::SEMIBOLD
-                                    } else {
-                                        FontWeight::NORMAL
-                                    })
-                                    .overflow_hidden()
-                                    .text_ellipsis(),
-                            )
-                            .children(subtitle.map(|s| {
-                                Label::new(s).text_xs().text_color(theme.muted_foreground)
-                            })),
-                    )
-                }
-            });
+                        // 看得见的菜单按钮(右键菜单保留);外面这层挡住按下事件,点按钮不会同时打开连接
+                        .child(
+                            div()
+                                .flex_none()
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                .child(
+                                    Button::new(SharedString::from(format!("conn-menu-{id}")))
+                                        .ghost()
+                                        .compact()
+                                        .icon(IconName::EllipsisVertical)
+                                        .dropdown_menu(move |menu, _, _| {
+                                            connection_menu(menu, &menu_view, id, &edit, &delete)
+                                        }),
+                                ),
+                        ),
+                )
+            }
+        });
 
         v_flex()
             .id("sidebar")
@@ -131,4 +148,22 @@ impl MainView {
                     .children(rows),
             )
     }
+}
+
+/// Edit、Delete 两项:右键菜单和 ⋮ 按钮的下拉共用。
+fn connection_menu(
+    menu: PopupMenu,
+    view: &Entity<MainView>,
+    id: xredis_core::config::ConnId,
+    edit: &str,
+    delete: &str,
+) -> PopupMenu {
+    menu.item(
+        PopupMenuItem::new(edit.to_string())
+            .on_click(send_to(view, move || Msg::OpenEditor(Some(id)))),
+    )
+    .item(
+        PopupMenuItem::new(delete.to_string())
+            .on_click(send_to(view, move || Msg::DeleteRequested(id))),
+    )
 }

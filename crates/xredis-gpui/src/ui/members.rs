@@ -417,6 +417,7 @@ impl MainView {
                 .whitespace_nowrap()
                 .cursor_pointer()
                 .when(row.binary, |d| d.italic())
+                .tooltip(super::text_tooltip(text.clone()))
                 .on_click(send(cx, move || {
                     view_msg(id, ViewMsg::OpenMember(name.clone()))
                 }))

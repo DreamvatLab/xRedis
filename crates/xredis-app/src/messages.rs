@@ -23,6 +23,16 @@ pub struct Entry {
     pub at_ms: i64,
 }
 
+impl Entry {
+    /// 消息日志每条前面的时间:`HH:MM:SS`,按给定的 UTC 偏移(分钟)。本地时区的偏移由 GUI 取,
+    /// 格式规则和 Pub/Sub 的消息行共用 [`crate::pubsub_view::clock_text`],只是不带毫秒。
+    pub fn time_text(&self, utc_offset_minutes: i32) -> String {
+        let mut text = crate::pubsub_view::clock_text(self.at_ms, utc_offset_minutes);
+        text.truncate("HH:MM:SS".len());
+        text
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Toast {
     pub id: u64,

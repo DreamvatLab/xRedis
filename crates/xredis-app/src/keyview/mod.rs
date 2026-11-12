@@ -811,11 +811,40 @@ impl KeyView {
         self.editor_seq
     }
 
-    /// 成员编辑器弹窗的标题;不是成员编辑器是 `None`。
+    /// 成员编辑器弹窗的标题:已有成员写明是哪个 key 的哪个成员,新建写 key 名加 New member;
+    /// 不是成员编辑器是 `None`。名字过长时截断(弹窗标题只有一行)。
     pub fn editor_title(&self, lang: &str) -> Option<String> {
-        match &self.editor.as_ref()?.target {
-            Target::Member { .. } => Some(tr(lang, "view.member.edit")),
-            Target::NewMember { .. } => Some(tr(lang, "view.member.new")),
+        let editor = self.editor.as_ref()?;
+        let clip = |s: String| -> String {
+            const MAX: usize = 40;
+            if s.chars().count() <= MAX {
+                s
+            } else {
+                s.chars().take(MAX).chain(['…']).collect()
+            }
+        };
+        match &editor.target {
+            Target::Member { key, .. } => {
+                // Hash、ZSet 的成员名在 member 里(List 是下标);Set 的成员就是 value
+                let member = if editor.member.orig().is_empty() {
+                    &editor.value
+                } else {
+                    &editor.member
+                };
+                Some(tr_with(
+                    lang,
+                    "view.member.edit_of",
+                    &[
+                        ("member", &clip(show(member.orig()).text)),
+                        ("key", &clip(show(key).text)),
+                    ],
+                ))
+            }
+            Target::NewMember { key, .. } => Some(tr_with(
+                lang,
+                "view.member.new_of",
+                &[("key", &clip(show(key).text))],
+            )),
             _ => None,
         }
     }

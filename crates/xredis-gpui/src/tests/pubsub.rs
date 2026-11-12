@@ -26,6 +26,11 @@ fn texts(cx: &mut TestAppContext, env: &Env, id: ConnId) -> Vec<String> {
     })
 }
 
+/// 消息记录控件里的文字和滚动位置(纵向,0 是顶,向下滚是负数)。
+fn widget(cx: &mut TestAppContext, env: &Env, id: ConnId) -> (String, f32) {
+    cx.read(|cx| env.view.read(cx).pubsub_output_state(id, cx).unwrap())
+}
+
 fn state(cx: &mut TestAppContext, env: &Env, id: ConnId) -> Subscription {
     read(cx, env, |a| {
         a.tab(id).unwrap().pubsub.subscription().clone()
@@ -100,7 +105,11 @@ fn subscribe_receive_publish_and_unsubscribe(cx: &mut TestAppContext) {
         Some(&b"news"[..])
     );
     assert!(texts(cx, &env, id)[0].contains("Subscribed to channel <news>"));
-    assert!(exists(cx, &env, "pubsub-row-0"));
+    assert!(
+        widget(cx, &env, id)
+            .0
+            .contains("Subscribed to channel <news>")
+    );
     // 订阅着:Subscribe 不可用,Unsubscribe 可用
     assert!(!read(cx, &env, |a| a
         .tab(id)
@@ -119,7 +128,7 @@ fn subscribe_receive_publish_and_unsubscribe(cx: &mut TestAppContext) {
         a.tab(id).unwrap().pubsub.line_count() == 2
     });
     assert!(texts(cx, &env, id)[1].contains("hello"));
-    assert!(exists(cx, &env, "pubsub-row-1"));
+    assert!(widget(cx, &env, id).0.contains("received: \"hello\""));
 
     // 自己发布(回环),多行消息原样发
     type_into(cx, &env, "pubsub-message", "line one\nline two");
@@ -192,13 +201,14 @@ fn a_binary_message_shows_lossily_and_clear_empties_the_list(cx: &mut TestAppCon
     });
     let line = texts(cx, &env, id)[1].clone();
     assert!(line.contains("<bin>") && line.contains("ok"), "{line}");
-    assert!(exists(cx, &env, "pubsub-row-1"));
+    let shown = widget(cx, &env, id).0;
+    assert!(shown.contains("<bin>") && shown.contains("ok"), "{shown}");
     click(cx, &env, "pubsub-clear");
     assert_eq!(
         read(cx, &env, |a| a.tab(id).unwrap().pubsub.line_count()),
         0
     );
-    assert!(!exists(cx, &env, "pubsub-row-0"));
+    assert_eq!(widget(cx, &env, id).0, "");
 }
 
 #[gpui_kit::test]
@@ -229,19 +239,46 @@ fn a_long_list_draws_only_the_visible_rows_and_follows_the_newest(cx: &mut TestA
     wait(cx, &env, "all messages", |a| {
         a.tab(id).unwrap().pubsub.line_count() == 401
     });
-    assert!(exists(cx, &env, "pubsub-list"));
+    assert!(exists(cx, &env, "pubsub-list"), "renders");
+    let (text, y) = widget(cx, &env, id);
+    assert_eq!(text.lines().count(), 401);
     assert!(
-        !exists(cx, &env, "pubsub-row-0"),
-        "scrolled away from the top"
+        text.ends_with("received: \"m399\""),
+        "the newest line is in the widget"
     );
+    assert!(y < -100.0, "scrolled down to the end, offset {y}");
+}
+
+/// R-12c:长消息和多行消息能看全(只读编辑控件里是全文,能选中复制),时间在第一行,
+/// 后续行缩进到文字列。
+#[gpui_kit::test]
+fn r12c_a_multiline_and_a_long_message_show_in_full(cx: &mut TestAppContext) {
+    let (env, ids) = setup(cx, &["a"]);
+    let id = ids[0];
+    open_pubsub(cx, &env, id);
+    subscribe(cx, &env, id, "c");
+    let long = "x".repeat(2000);
+    env.fake.emit(
+        id,
+        b"c",
+        format!(
+            "first
+second {long}"
+        )
+        .as_bytes(),
+    );
+    wait(cx, &env, "message", |a| {
+        a.tab(id).unwrap().pubsub.line_count() == 2
+    });
+    let (text, _) = widget(cx, &env, id);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 3, "{text}");
+    assert!(lines[1].ends_with("received: \"first"), "{}", lines[1]);
+    assert!(lines[2].starts_with(&" ".repeat(14)));
     assert!(
-        exists(cx, &env, "pubsub-row-400"),
-        "the newest line is visible"
+        lines[2].contains(&long),
+        "the whole message is there, not cut"
     );
-    let drawn = (0..401)
-        .filter(|i| exists(cx, &env, &format!("pubsub-row-{i}")))
-        .count();
-    assert!(drawn < 60, "drew {drawn} rows");
 }
 
 #[gpui_kit::test]

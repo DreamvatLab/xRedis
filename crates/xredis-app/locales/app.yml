@@ -497,10 +497,10 @@ view.format.plain:
   en: "Plain text"
 view.hex_truncated:
   en: "Hex view: only the first %{shown} are shown, of %{total}."
-view.member.edit:
-  en: "Edit member"
-view.member.new:
-  en: "New member"
+view.member.edit_of:
+  en: "Edit member '%{member}' of '%{key}'"
+view.member.new_of:
+  en: "%{key}: New member"
 view.members.empty:
   en: "No members"
 view.members.delete_title:

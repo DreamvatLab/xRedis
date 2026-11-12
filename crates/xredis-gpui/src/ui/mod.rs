@@ -71,3 +71,20 @@ pub(crate) fn send_to(
         view.update(cx, |this, cx| this.dispatch(msg, window, cx));
     }
 }
+
+/// 悬停提示:显示 `App` 给的完整文字(截断的单元格、侧栏连接名、Tab 标题)。
+pub(crate) fn text_tooltip(
+    text: impl Into<SharedString>,
+) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    let text: SharedString = text.into();
+    move |window, cx| gpui_kit::component::tooltip::Tooltip::new(text.clone()).build(window, cx)
+}
+
+/// 毫秒时间戳那一刻的本地时区偏移(分钟)。
+pub(crate) fn local_offset_minutes(at_ms: i64) -> i32 {
+    use chrono::{Local, TimeZone as _};
+    Local
+        .timestamp_millis_opt(at_ms)
+        .single()
+        .map_or(0, |t| t.offset().local_minus_utc() / 60)
+}

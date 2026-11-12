@@ -37,14 +37,24 @@ impl MainView {
         let view = cx.entity();
         let tabs = self.app.tabs.iter().map(|t| {
             let id = t.id;
-            Tab::new().label(self.app.connection_name(id)).suffix(
-                Button::new(SharedString::from(format!("tab-close-{id}")))
-                    .ghost()
-                    .compact()
-                    .icon(IconName::Close)
-                    .tooltip(self.app.t("tab.close"))
-                    .on_click(send(cx, move || Msg::CloseTab(id))),
-            )
+            let name = self.app.connection_name(id);
+            // 标题放进带 id 和悬停提示的元素里(Tab 自己没有 tooltip);aria 标签仍是显示名
+            Tab::new()
+                .aria_label(name.clone())
+                .child(
+                    div()
+                        .id(SharedString::from(format!("tab-title-{id}")))
+                        .tooltip(super::text_tooltip(name.clone()))
+                        .child(name),
+                )
+                .suffix(
+                    Button::new(SharedString::from(format!("tab-close-{id}")))
+                        .ghost()
+                        .compact()
+                        .icon(IconName::Close)
+                        .tooltip(self.app.t("tab.close"))
+                        .on_click(send(cx, move || Msg::CloseTab(id))),
+                )
         });
         TabBar::new("tabs")
             .underline()
@@ -86,10 +96,19 @@ impl MainView {
                             .child(format!("{}: {reason}", self.app.t("tab.failed"))),
                     )
                     .child(
-                        Button::new(SharedString::from(format!("retry-{id}")))
-                            .primary()
-                            .label(self.app.t("btn.retry"))
-                            .on_click(send(cx, move || Msg::Reconnect(id))),
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                Button::new(SharedString::from(format!("retry-{id}")))
+                                    .primary()
+                                    .label(self.app.t("btn.retry"))
+                                    .on_click(send(cx, move || Msg::Reconnect(id))),
+                            )
+                            .child(
+                                Button::new("tab-open-log")
+                                    .label(self.app.t("btn.open_log"))
+                                    .on_click(send(cx, || Msg::OpenMessageLog)),
+                            ),
                     ),
             ),
             TabStatus::Ready(_) => {

@@ -409,3 +409,68 @@ fn r12b_the_embedded_font_files_are_real_ttf_files() {
         assert!(bytes.windows(family.len()).any(|w| w == family.as_slice()));
     }
 }
+
+/// R-12c:侧栏每行有看得见的 ⋮ 按钮;点它不会同时打开连接;折叠时不显示。
+#[gpui_kit::test]
+fn r12c_the_connection_menu_button_does_not_open_the_connection(cx: &mut TestAppContext) {
+    let (env, ids) = setup(cx, &["a", "b"]);
+    for id in &ids {
+        assert!(
+            exists(cx, &env, &format!("conn-menu-{id}")),
+            "button for {id}"
+        );
+    }
+    click(cx, &env, &format!("conn-menu-{}", ids[0]));
+    assert_eq!(
+        read(cx, &env, |a| a.tabs.len()),
+        0,
+        "the menu button must not open the connection"
+    );
+    assert!(read(cx, &env, |a| a.editor.is_none()));
+    // 对照:点行本身还是打开
+    click(cx, &env, &format!("conn-{}", ids[1]));
+    assert_eq!(read(cx, &env, |a| a.tabs.len()), 1);
+
+    click(cx, &env, "toggle-sider");
+    wait(cx, &env, "collapsed", |a| a.settings.sider_menu_collapsed);
+    assert!(!exists(cx, &env, &format!("conn-menu-{}", ids[0])));
+}
+
+/// R-12c:连接失败页有"打开消息日志"按钮。
+#[gpui_kit::test]
+fn r12c_the_failed_page_can_open_the_message_log(cx: &mut TestAppContext) {
+    let (env, ids) = setup(cx, &["a"]);
+    env.fake
+        .fail_next("connect", xredis_core::Error::Connect("refused".into()));
+    click(cx, &env, &format!("conn-{}", ids[0]));
+    wait(cx, &env, "failed", is_failed);
+    click(cx, &env, "error-ok");
+    assert!(!read(cx, &env, |a| a.messages.open));
+    click(cx, &env, "tab-open-log");
+    assert!(read(cx, &env, |a| a.messages.open));
+    assert!(exists(cx, &env, "message-log"));
+}
+
+/// R-12c:消息日志每条前面有 `HH:MM:SS` 的本地时间(格式规则在 App,这里只看它被画出来)。
+#[gpui_kit::test]
+fn r12c_message_log_entries_show_a_clock_time(cx: &mut TestAppContext) {
+    let (env, ids) = setup(cx, &["a"]);
+    env.fake
+        .fail_next("connect", xredis_core::Error::Connect("refused".into()));
+    click(cx, &env, &format!("conn-{}", ids[0]));
+    wait(cx, &env, "failed", is_failed);
+    click(cx, &env, "error-ok");
+    click(cx, &env, "message-latest");
+    let texts = painted_texts(cx, &env);
+    let is_clock = |t: &String| {
+        t.len() == 8
+            && t.char_indices().all(|(i, c)| {
+                if i == 2 || i == 5 {
+                    c == ':'
+                } else {
+                    c.is_ascii_digit()
+                }
+            })
+    };
+    assert!(texts.iter().any(is_clock), "no HH:MM:SS in {texts:?}");
+}

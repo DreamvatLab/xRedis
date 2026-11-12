@@ -168,6 +168,31 @@ impl PubSubView {
         !self.lines.is_empty()
     }
 
+    /// 全部消息的文字,一条消息从新的一行开始,前面是 `HH:MM:SS.mmm` 加两个空格;
+    /// 多行消息的后续行缩进到文字列,时间还是一列。`utc_offset_of` 给一个时刻的本地 UTC 偏移(分钟)。
+    /// 界面用只读编辑控件显示:能换行、选中、复制。
+    pub fn transcript(&self, utc_offset_of: impl Fn(i64) -> i32) -> String {
+        let mut out = String::new();
+        for line in &self.lines {
+            let clock = line.clock_text(utc_offset_of(line.at_ms));
+            let pad = " ".repeat(clock.chars().count() + 2);
+            let text = line.text.replace("\r\n", "\n");
+            for (i, part) in text.split('\n').enumerate() {
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                if i == 0 {
+                    out.push_str(&clock);
+                    out.push_str("  ");
+                } else {
+                    out.push_str(&pad);
+                }
+                out.push_str(part);
+            }
+        }
+        out
+    }
+
     /// 消息行每变一次就不一样。
     pub fn revision(&self) -> u64 {
         self.revision

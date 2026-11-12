@@ -1930,3 +1930,17 @@ fn r12a_connection_name_falls_back_to_host_and_port() {
     assert_eq!(app.connection_name(unknown), "");
     assert_eq!(app.connection_subtitle(unknown), None);
 }
+
+#[test]
+fn r12c_message_entries_show_a_local_clock_time_without_millis() {
+    let e = |at_ms| crate::messages::Entry {
+        id: 1,
+        level: Level::Info,
+        text: "x".into(),
+        at_ms,
+    };
+    assert_eq!(e(3_723_456).time_text(0), "01:02:03");
+    assert_eq!(e(3_723_456).time_text(480), "09:02:03");
+    assert_eq!(e(0).time_text(-60), "23:00:00", "wraps around midnight");
+    assert_eq!(e(-1).time_text(0), "23:59:59");
+}

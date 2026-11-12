@@ -541,6 +541,7 @@ impl MainView {
                         d.line_through().text_color(theme.muted_foreground)
                     })
                     .when(row.binary, |d| d.italic())
+                    .tooltip(super::text_tooltip(label.clone()))
                     .when(openable, |d| {
                         d.cursor_pointer().on_click(send(cx, move || Msg::View {
                             id,

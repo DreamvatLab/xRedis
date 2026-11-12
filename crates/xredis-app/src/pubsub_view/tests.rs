@@ -463,3 +463,20 @@ fn the_revision_changes_with_every_change_to_the_lines_even_at_the_cap() {
     h.send(PubSubMsg::Clear);
     assert_ne!(r2, h.v.revision());
 }
+
+/// R-12c:消息文字整体给界面(只读编辑控件显示,能选中复制、能换行):每条前面是时间,
+/// 多行消息的后续行缩进到文字列,所以时间还是一列。
+#[test]
+fn r12c_the_transcript_has_a_clock_column_and_indents_multiline_messages() {
+    let mut h = H::new();
+    h.v.push(3_723_456, "one".into());
+    h.v.push(3_723_457, "two\r\nthree\n\nfour".into());
+    let pad = " ".repeat("01:02:03.456  ".chars().count());
+    assert_eq!(
+        h.v.transcript(|_| 0),
+        format!("01:02:03.456  one\n01:02:03.457  two\n{pad}three\n{pad}\n{pad}four")
+    );
+    // 偏移按每条消息那一刻算(夏令时),由界面给
+    assert!(h.v.transcript(|_| 480).starts_with("09:02:03.456  one"));
+    assert_eq!(H::new().v.transcript(|_| 0), "");
+}

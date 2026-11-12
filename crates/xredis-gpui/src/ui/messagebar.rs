@@ -2,6 +2,7 @@
 
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::label::Label;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -31,7 +32,14 @@ impl MainView {
         let log = open.then(|| {
             let entries: Vec<_> = bar
                 .entries()
-                .map(|e| (e.id, e.level, e.text.clone()))
+                .map(|e| {
+                    (
+                        e.id,
+                        e.level,
+                        e.time_text(super::local_offset_minutes(e.at_ms)),
+                        e.text.clone(),
+                    )
+                })
                 .collect();
             v_flex()
                 .id("message-log")
@@ -66,13 +74,20 @@ impl MainView {
                     )
                 })
                 // 最新的在上面
-                .children(entries.into_iter().rev().map(|(id, level, text)| {
-                    div()
+                .children(entries.into_iter().rev().map(|(id, level, time, text)| {
+                    h_flex()
                         .id(SharedString::from(format!("message-{id}")))
                         .test_support()
+                        .gap_2()
+                        .items_start()
                         .text_sm()
                         .text_color(level_color(level, cx))
-                        .child(text)
+                        .child(
+                            Label::new(time)
+                                .flex_none()
+                                .text_color(cx.theme().muted_foreground),
+                        )
+                        .child(div().flex_1().min_w_0().child(text))
                 }))
         });
 

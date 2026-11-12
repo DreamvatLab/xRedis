@@ -1877,11 +1877,45 @@ fn each_opened_editor_gets_a_new_sequence_number_and_a_title() {
     h.send(ViewMsg::OpenMember(b("字段0")));
     let s1 = h.view.editor_seq();
     assert_ne!(s0, s1);
-    assert_eq!(h.view.editor_title("en").as_deref(), Some("Edit member"));
+    assert_eq!(
+        h.view.editor_title("en").as_deref(),
+        Some("Edit member '字段0' of '用户'")
+    );
     h.send(ViewMsg::CloseEditor);
     h.send(ViewMsg::NewMember);
     assert_ne!(h.view.editor_seq(), s1);
-    assert_eq!(h.view.editor_title("en").as_deref(), Some("New member"));
+    assert_eq!(
+        h.view.editor_title("en").as_deref(),
+        Some("用户: New member")
+    );
     h.send(ViewMsg::CloseEditor);
     assert_eq!(h.view.editor_title("en"), None);
+}
+
+/// R-12c:弹窗标题写明是哪个 key 的哪个成员;Set 的成员就是值;名字太长要截断。
+#[test]
+fn r12c_the_member_dialog_title_names_the_key_and_the_member() {
+    let (mut h, out) = H::open("集合", KeyType::Set);
+    let (sg, _) = scans(&out)[0];
+    h.batch(sg, vec![Member::Set { member: b("甲") }], 0);
+    h.send(ViewMsg::OpenMember(b("甲")));
+    assert_eq!(
+        h.view.editor_title("en").as_deref(),
+        Some("Edit member '甲' of '集合'")
+    );
+
+    let long = "k".repeat(100);
+    let (mut h, out) = H::open(&long, KeyType::Hash);
+    let (sg, _) = scans(&out)[0];
+    h.batch(sg, vec![hash_row("字段", "值")], 0);
+    h.send(ViewMsg::OpenMember(b("字段")));
+    let title = h.view.editor_title("en").unwrap();
+    assert!(title.contains(&format!("{}…", "k".repeat(40))), "{title}");
+    assert!(!title.contains(&"k".repeat(41)), "{title}");
+    h.send(ViewMsg::CloseEditor);
+    h.send(ViewMsg::NewMember);
+    assert_eq!(
+        h.view.editor_title("en"),
+        Some(format!("{}…: New member", "k".repeat(40)))
+    );
 }
